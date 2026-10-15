@@ -51,10 +51,27 @@ public final class IndexService {
 
     public init(roots: [String], indexURL: URL = FileIndex.defaultIndexURL,
                 exclusions: Set<String> = Scanner.defaultExclusions, log: @escaping (String) -> Void = { _ in }) {
-        self.roots = roots.map(IndexService.canonical)
+        self.roots = IndexService.normalizeRoots(roots, exclusions: exclusions)
         self.indexURL = indexURL
         self.scanner = Scanner(exclusions: exclusions)
         self.log = log
+    }
+
+    /// Canonical, unique, non-overlapping roots. A root inside another root is kept only when
+    /// the outer root's scan skips it (for example /Volumes/Work under /, since /Volumes is
+    /// excluded); otherwise it would be indexed twice.
+    public static func normalizeRoots(_ roots: [String], exclusions: Set<String>) -> [String] {
+        var unique: [String] = []
+        for root in roots.map(canonical) where !unique.contains(root) { unique.append(root) }
+        func inside(_ path: String, _ outer: String) -> Bool {
+            outer == "/" ? path != "/" : path.hasPrefix(outer + "/")
+        }
+        return unique.filter { root in
+            !unique.contains { outer in
+                outer != root && inside(root, outer)
+                    && !exclusions.contains { ex in root == ex || inside(root, ex) }
+            }
+        }
     }
 
     /// Resolves symlinks and /private aliases the way FSEvents reports paths.
@@ -176,15 +193,28 @@ public final class IndexService {
         work.async { try? self.saveOnWork() }
     }
 
+    /// Roots whose FSEvents stream failed to start. Retried by `maintenance`, reported in status.
+    public private(set) var unwatchedRoots: [String] = []
+
+    /// Caller holds `lifecycle`.
     private func startWatchers(since states: [String: FileIndex.VolumeState]) {
         watchers.forEach { $0.stop() }
-        watchers = roots.map { root in
-            let since = states[root]?.lastEventId
-            let w = Watcher(paths: [root], since: since) { [weak self] events in
-                self?.receive(events, root: root)
-            }
-            if !w.start(since: since) { log("could not watch \(root)") }
-            return w
+        watchers = []
+        unwatchedRoots = []
+        for root in roots { startWatcher(root, since: states[root]?.lastEventId) }
+    }
+
+    /// Caller holds `lifecycle`.
+    private func startWatcher(_ root: String, since: UInt64?) {
+        let w = Watcher(paths: [root], since: since) { [weak self] events in
+            self?.receive(events, root: root)
+        }
+        if w.start(since: since) {
+            watchers.append(w)
+            unwatchedRoots.removeAll { $0 == root }
+        } else {
+            log("could not watch \(root); changes there are missed until a retry succeeds")
+            if !unwatchedRoots.contains(root) { unwatchedRoots.append(root) }
         }
     }
 
@@ -289,6 +319,11 @@ public final class IndexService {
     }
 
     private func maintenance() {
+        // Retry failed watchers from the last applied event, so nothing missed is skipped.
+        if !unwatchedRoots.isEmpty, lifecycle.try() {
+            for root in unwatchedRoots { startWatcher(root, since: appliedEventIds[root]) }
+            lifecycle.unlock()
+        }
         index.write { idx in
             if idx.records.count > 0 && Double(idx.deletedCount) / Double(idx.records.count) > 0.2 {
                 // Compaction renumbers records; safe because ids never leave a single request.
@@ -355,7 +390,8 @@ public final class IndexService {
 
     public func status() -> IPCStatus {
         IPCStatus(ready: ready, entries: index.read { $0.liveCount }, roots: roots, scanning: scanning,
-                  lastScanSeconds: lastScanSeconds, memoryBytes: IndexService.residentBytes())
+                  lastScanSeconds: lastScanSeconds, memoryBytes: IndexService.residentBytes(),
+                  unwatchedRoots: unwatchedRoots)
     }
 
     public static func residentBytes() -> Int? {

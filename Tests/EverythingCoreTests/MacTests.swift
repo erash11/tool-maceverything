@@ -134,6 +134,15 @@ final class MacTests: XCTestCase {
         service.stop()
     }
 
+    func testRootsAreNormalized() {
+        let ex = Scanner.defaultExclusions
+        XCTAssertEqual(IndexService.normalizeRoots([dir, dir + "/", dir + "/a"], exclusions: ex), [dir])
+        XCTAssertEqual(IndexService.normalizeRoots(["/", "/Volumes/Work", "/Users"], exclusions: ex),
+                       ["/", "/Volumes/Work"])
+        XCTAssertEqual(IndexService.normalizeRoots([dir + "/a", dir + "/empty"], exclusions: ex),
+                       [dir + "/a", dir + "/empty"])
+    }
+
     func testConcurrentRescansAreSerialized() {
         let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-rescan.bin"))
         service.start()
