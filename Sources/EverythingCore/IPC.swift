@@ -88,7 +88,11 @@ public enum IPC {
         #endif
     }
 
-    static func readLine(_ fd: Int32) -> Data? {
+    /// Largest request line the daemon accepts. Real requests are a few hundred bytes.
+    static let maxRequestBytes = 64 * 1024
+
+    /// Reads up to a newline. Returns nil on EOF, error, timeout, or a line over `maxBytes`.
+    static func readLine(_ fd: Int32, maxBytes: Int = .max) -> Data? {
         var data = Data()
         var buf = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
@@ -96,10 +100,17 @@ public enum IPC {
             if n <= 0 { return data.isEmpty ? nil : data }
             if let nl = buf[0..<n].firstIndex(of: 10) {
                 data.append(contentsOf: buf[0..<nl])
-                return data
+                return data.count <= maxBytes ? data : nil
             }
             data.append(contentsOf: buf[0..<n])
+            if data.count > maxBytes { return nil }
         }
+    }
+
+    /// Gives up on a client that stops sending, so it cannot hold a worker forever.
+    static func setReadTimeout(_ fd: Int32, seconds: Int) {
+        var tv = timeval(tv_sec: seconds, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
     }
 
     static func writeAll(_ fd: Int32, _ data: Data) -> Bool {
@@ -181,6 +192,7 @@ public final class IPCServer {
                 }
                 guard let self else { close(client); return }
                 IPC.disableSigPipe(client)
+                IPC.setReadTimeout(client, seconds: 5)
                 self.workers.async { self.serve(client) }
             }
         }
@@ -188,7 +200,12 @@ public final class IPCServer {
 
     private func serve(_ client: Int32) {
         defer { close(client) }
-        guard let line = IPC.readLine(client) else { return }
+        guard let line = IPC.readLine(client, maxBytes: IPC.maxRequestBytes) else {
+            if let data = try? JSONEncoder().encode(IPCResponse(ok: false, error: "request too large or incomplete")) {
+                _ = IPC.writeAll(client, data)
+            }
+            return
+        }
         let response: IPCResponse
         if let request = try? JSONDecoder().decode(IPCRequest.self, from: line) {
             response = handler(request)

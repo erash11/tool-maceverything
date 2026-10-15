@@ -52,9 +52,12 @@ public final class FileIndex {
     public struct VolumeState: Codable, Equatable {
         public var volumeUUID: String
         public var lastEventId: UInt64
-        public init(volumeUUID: String, lastEventId: UInt64) {
+        /// True when lastEventId comes from a per-device stream (see Watcher).
+        public var perDevice: Bool?
+        public init(volumeUUID: String, lastEventId: UInt64, perDevice: Bool? = nil) {
             self.volumeUUID = volumeUUID
             self.lastEventId = lastEventId
+            self.perDevice = perDevice
         }
     }
 

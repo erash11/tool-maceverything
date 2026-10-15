@@ -15,6 +15,11 @@ jobs:
         run: swift --version && sw_vers
       - name: Build
         run: swift build -c release
+      - name: Mount a test volume
+        run: |
+          hdiutil create -size 64m -fs APFS -volname MEVTest "$RUNNER_TEMP/mevtest.dmg"
+          hdiutil attach "$RUNNER_TEMP/mevtest.dmg"
+          echo "MEV_TEST_VOLUME=/Volumes/MEVTest" >> "$GITHUB_ENV"
       - name: Test
         run: swift test
       - name: Benchmark on /usr and /Applications
