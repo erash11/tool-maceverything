@@ -79,7 +79,9 @@ public struct Scanner {
             let count = withUnsafeMutablePointer(to: &attrs) { ptr in
                 getattrlistbulk(fd, ptr, buffer, bufferSize, 0)
             }
-            if count < 0 { return out.isEmpty ? nil : out }
+            // A failure after some entries means the listing is incomplete. Callers treat a
+            // listing as the whole folder, so a partial one would delete the missing entries.
+            if count < 0 { return nil }
             if count == 0 { break }
             var entry = UnsafeRawPointer(buffer)
             for _ in 0..<Int(count) {
@@ -179,14 +181,22 @@ public struct Scanner {
     }
 
     /// Re-lists `dir` and, when `recursive`, every directory below it. New directories are
-    /// always walked, since a folder moved in arrives with its contents.
-    public func refresh(_ index: FileIndex, dir: Int32, path: String, recursive: Bool) {
+    /// always walked, since a folder moved in arrives with its contents. Returns false when a
+    /// folder that still exists could not be read, so the caller can retry instead of
+    /// treating the change as applied.
+    @discardableResult
+    public func refresh(_ index: FileIndex, dir: Int32, path: String, recursive: Bool) -> Bool {
+        var complete = true
         var queue: [(String, Int32, Bool)] = [(path, dir, recursive)]
         while let (p, id, deep) = queue.popLast() {
             guard let entries = list(p) else {
-                // The folder is gone or unreadable now; drop it unless it is a root.
-                if index.records[Int(id)].parent >= 0 && !FileManager.default.fileExists(atPath: p) {
+                if FileManager.default.fileExists(atPath: p) {
+                    complete = false
+                } else if index.records[Int(id)].parent >= 0 {
                     index.remove(id)
+                } else {
+                    // A root that disappeared keeps its record but loses everything under it.
+                    index.replaceChildren(of: id, with: [])
                 }
                 continue
             }
@@ -199,5 +209,6 @@ public struct Scanner {
                 queue.append((kidPath, kid, true))
             }
         }
+        return complete
     }
 }
