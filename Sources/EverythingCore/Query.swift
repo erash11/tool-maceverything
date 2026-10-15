@@ -74,7 +74,7 @@ public struct Query {
             negated = true
             token.removeFirst()
         }
-        let lower = token.lowercased()
+        let lower = FileIndex.searchForm(token)
 
         if lower == "file:" { return .filesOnly }
         if lower == "folder:" { return .foldersOnly }

@@ -130,7 +130,9 @@ public final class IndexService {
         let started = Date()
         let fresh = FileIndex()
         for root in roots {
-            let id = fresh.addRoot(root)
+            let mtime = (try? FileManager.default.attributesOfItem(atPath: root)[.modificationDate] as? Date)
+                .map { Int64($0.timeIntervalSince1970) } ?? 0
+            let id = fresh.addRoot(root, modified: mtime)
             let stats = scanner.scanTree(into: fresh, root: id, rootPath: root)
             log("scanned \(root): \(stats.entries) entries, \(stats.unreadable) unreadable folders, "
                 + String(format: "%.1f s", stats.seconds))

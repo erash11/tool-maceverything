@@ -121,7 +121,7 @@ func runBench(_ folder: String) {
         let index = FileIndex()
         let root = index.addRoot(folder)
         let stats = Scanner(useBulk: bulk).scanTree(into: index, root: root, rootPath: folder)
-        print(String(format: "  %@: %d entries, %d folders, %d unreadable, %.2f s",
+        print(String(format: "  %@: %ld entries, %ld folders, %ld unreadable, %.2f s",
                      label, stats.entries, stats.directories, stats.unreadable, stats.seconds))
     }
     let index = FileIndex()
@@ -132,7 +132,7 @@ func runBench(_ folder: String) {
     print(String(format: "  sort by name: %.2f s", Date().timeIntervalSince(t0)))
     for q in ["a", "report", "*.pdf", "ext:jpg;png", "path:lib", "size:>10mb", "regex:^[0-9]+$", "zzzzqqq"] {
         let r = index.search(Query.parse(q), options: SearchOptions(limit: 100))
-        print(String(format: "  search %-16@ %8d matches  %7.2f ms", q as NSString, r.total, r.milliseconds))
+        print(String(format: "  search %-16@ %8ld matches  %7.2f ms", q as NSString, r.total, r.milliseconds))
     }
 }
 

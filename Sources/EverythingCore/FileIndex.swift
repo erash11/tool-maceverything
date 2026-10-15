@@ -133,6 +133,12 @@ public final class FileIndex {
         return nil
     }
 
+    /// Lowercase, precomposed form used for matching. macOS returns decomposed names
+    /// ("e" + combining accent) while typed queries are precomposed.
+    public static func searchForm(_ s: String) -> String {
+        s.lowercased().precomposedStringWithCanonicalMapping
+    }
+
     // MARK: - Writing
 
     @discardableResult
@@ -151,7 +157,7 @@ public final class FileIndex {
         let id = Int32(records.count)
         var bytes = Array(name.utf8)
         if bytes.count > Int(UInt16.max) { bytes = Array(bytes.prefix(Int(UInt16.max))) }
-        var lower = Array(name.lowercased().utf8)
+        var lower = Array(FileIndex.searchForm(name).utf8)
         if lower.count > Int(UInt16.max) { lower = Array(lower.prefix(Int(UInt16.max))) }
         let record = Record(
             parent: parent,

@@ -75,14 +75,14 @@ final class IndexTests: XCTestCase {
 
     func testDateModified() {
         let index = FileIndex()
-        let root = index.addRoot("/x")
         let cal = Calendar(identifier: .gregorian)
         let now = cal.date(from: DateComponents(year: 2026, month: 10, day: 15, hour: 12))!
         let today = Int64(cal.startOfDay(for: now).timeIntervalSince1970)
+        let root = index.addRoot("/x", modified: today + 30)
         index.add(ScannedEntry(name: "new.txt", isDirectory: false, size: 1, modified: today + 60), parent: root)
         index.add(ScannedEntry(name: "old.txt", isDirectory: false, size: 1, modified: today - 86_400 * 3), parent: root)
         let q = Query.parse("dm:today", now: now, calendar: cal)
-        XCTAssertEqual(index.search(q).hits.map(\.name), ["new.txt"])
+        XCTAssertEqual(index.search(q).hits.map(\.name), ["/x", "new.txt"])
         let q2 = Query.parse("dm:<2026-10-15", now: now, calendar: cal)
         XCTAssertEqual(index.search(q2).hits.map(\.name), ["old.txt"])
     }
