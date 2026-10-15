@@ -6,13 +6,27 @@ cd "$(dirname "$0")/.."
 ./scripts/make-app.sh
 
 BIN_DIR="$HOME/.local/bin"
+LABEL=com.erash11.maceverything.daemon
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 mkdir -p "$BIN_DIR" "$HOME/Applications" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
-cp build/ev build/everythingd "$BIN_DIR/"
+
+# Stop the running daemon and app before replacing their binaries. Overwriting a running,
+# code-signed binary in place can get it killed, and launchd could relaunch a half-copied file.
+launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+osascript -e 'quit app "MacEverything"' 2>/dev/null || true
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || break
+  sleep 0.5
+done
+
+# rm first, so each copy is a new file rather than a rewrite of the old one.
+for bin in ev everythingd; do
+  rm -f "$BIN_DIR/$bin"
+  cp "build/$bin" "$BIN_DIR/$bin"
+done
 rm -rf "$HOME/Applications/MacEverything.app"
 cp -R build/MacEverything.app "$HOME/Applications/"
 
-LABEL=com.erash11.maceverything.daemon
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 cat > "$PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -28,8 +42,12 @@ cat > "$PLIST" <<PLIST
 </plist>
 PLIST
 
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+# bootstrap can fail briefly right after a bootout; retry before giving up.
+for i in 1 2 3 4 5; do
+  if launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then break; fi
+  if [ "$i" = 5 ]; then echo "launchctl bootstrap failed; run: launchctl bootstrap gui/$(id -u) $PLIST" >&2; exit 1; fi
+  sleep 1
+done
 open "$HOME/Applications/MacEverything.app"
 
 cat <<MSG

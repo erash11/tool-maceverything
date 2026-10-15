@@ -131,7 +131,38 @@ final class MacTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.2)
         }
         XCTAssertEqual(left, 0)
+
+        // The folder comes back (a drive plugged in again): maintenance re-lists it.
+        try FileManager.default.createDirectory(atPath: dir + "/back", withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: dir + "/back/returned.txt", contents: nil)
+        service.maintenanceNow()
+        service.sync()
+        XCTAssertEqual(service.index.read { $0.search(Query.parse("returned.txt")).total }, 1)
         service.stop()
+    }
+
+    func testOnlyNewRootsAreScannedOnLoad() throws {
+        let other = dir + "-other"
+        try FileManager.default.createDirectory(atPath: other, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: other + "/other-file.txt", contents: nil)
+        defer { try? FileManager.default.removeItem(atPath: other) }
+        let indexURL = URL(fileURLWithPath: dir + "-roots.bin")
+        let first = IndexService(roots: [dir], indexURL: indexURL)
+        first.start()
+        first.stop()
+
+        var lines: [String] = []
+        let lock = NSLock()
+        let second = IndexService(roots: [dir, other], indexURL: indexURL) { line in
+            lock.lock(); lines.append(line); lock.unlock()
+        }
+        second.start()
+        defer { second.stop() }
+        lock.lock(); defer { lock.unlock() }
+        XCTAssertTrue(lines.contains { $0.hasPrefix("scanned \(other)") }, "\(lines)")
+        XCTAssertFalse(lines.contains { $0.hasPrefix("scanned \(self.dir):") }, "\(lines)")
+        XCTAssertEqual(second.index.read { $0.search(Query.parse("other-file")).total }, 1)
+        XCTAssertEqual(second.index.read { $0.search(Query.parse("two.pdf")).total }, 1)
     }
 
     func testRootsAreNormalized() {

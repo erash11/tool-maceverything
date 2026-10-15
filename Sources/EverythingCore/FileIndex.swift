@@ -44,6 +44,9 @@ public final class FileIndex {
     var unsorted: [Int32] = []
     /// rank[id] = position of id in `order`, or -1 when the id is not in `order`.
     var rank: [Int32] = []
+    /// Ids of every record with no parent, deleted or not. Roots are few, so lookups scan this
+    /// instead of all records.
+    var rootIdList: [Int32] = []
     public internal(set) var deletedCount = 0
 
     /// Saved FSEvents state per root path.
@@ -88,13 +91,7 @@ public final class FileIndex {
         return result
     }
 
-    public var roots: [Int32] {
-        var out: [Int32] = []
-        for (i, r) in records.enumerated() where r.parent < 0 && !r.isDeleted {
-            out.append(Int32(i))
-        }
-        return out
-    }
+    public var roots: [Int32] { rootIdList.filter { !records[Int($0)].isDeleted } }
 
     public func childIds(of id: Int32) -> [Int32] { children[id] ?? [] }
 
@@ -159,11 +156,19 @@ public final class FileIndex {
     }
 
     private func append(name: String, parent: Int32, isDirectory: Bool, size: Int64, modified: Int64) -> Int32 {
-        let id = Int32(records.count)
         var bytes = Array(name.utf8)
         if bytes.count > Int(UInt16.max) { bytes = Array(bytes.prefix(Int(UInt16.max))) }
         var lower = Array(FileIndex.searchForm(name).utf8)
         if lower.count > Int(UInt16.max) { lower = Array(lower.prefix(Int(UInt16.max))) }
+        return appendRaw(bytes: bytes[...], lower: lower[...], parent: parent, isDirectory: isDirectory,
+                         size: size, modified: modified)
+    }
+
+    /// Appends a record whose name bytes are already prepared (used by compaction, which
+    /// copies them instead of lowercasing and normalizing every name again).
+    private func appendRaw(bytes: ArraySlice<UInt8>, lower: ArraySlice<UInt8>, parent: Int32,
+                           isDirectory: Bool, size: Int64, modified: Int64) -> Int32 {
+        let id = Int32(records.count)
         let record = Record(
             parent: parent,
             nameStart: UInt32(names.count), nameLength: UInt16(bytes.count),
@@ -173,7 +178,7 @@ public final class FileIndex {
         lowerNames.append(contentsOf: lower)
         records.append(record)
         rank.append(-1)
-        if parent >= 0 { children[parent, default: []].append(id) }
+        if parent >= 0 { children[parent, default: []].append(id) } else { rootIdList.append(id) }
         unsorted.append(id)
         return id
     }
@@ -186,8 +191,14 @@ public final class FileIndex {
             siblings.remove(at: i)
             children[parent] = siblings
         }
+        markDeleted(id)
+    }
+
+    /// Flags a subtree deleted without touching the parent's child list.
+    private func markDeleted(_ id: Int32) {
         var stack = [id]
         while let cur = stack.popLast() {
+            if records[Int(cur)].isDeleted { continue }
             records[Int(cur)].flags |= 2
             deletedCount += 1
             if let kids = children.removeValue(forKey: cur) { stack.append(contentsOf: kids) }
@@ -200,21 +211,30 @@ public final class FileIndex {
     public func replaceChildren(of dir: Int32, with entries: [ScannedEntry]) -> [Int32] {
         var existing: [String: Int32] = [:]
         for kid in children[dir] ?? [] { existing[name(of: kid)] = kid }
-        var newDirs: [Int32] = []
+        // Build the new child list once; removing ids one at a time from the parent's list
+        // would be quadratic when a big folder is emptied.
+        var kept: [Int32] = []
+        var added: [(ScannedEntry)] = []
         for entry in entries {
             if let id = existing.removeValue(forKey: entry.name) {
-                let old = records[Int(id)]
-                if old.isDirectory == entry.isDirectory {
+                if records[Int(id)].isDirectory == entry.isDirectory {
                     records[Int(id)].size = entry.size
                     records[Int(id)].modified = entry.modified
+                    kept.append(id)
                     continue
                 }
-                remove(id)
+                markDeleted(id)
             }
-            let id = add(entry, parent: dir)
+            added.append(entry)
+        }
+        for (_, gone) in existing { markDeleted(gone) }
+        children[dir] = kept
+        var newDirs: [Int32] = []
+        for entry in added {
+            let id = add(entry, parent: dir) // appends to children[dir]
             if entry.isDirectory { newDirs.append(id) }
         }
-        for (_, gone) in existing { remove(gone) }
+        if children[dir]?.isEmpty == true { children[dir] = nil }
         return newDirs
     }
 
@@ -237,11 +257,23 @@ public final class FileIndex {
 
     /// Folds `unsorted` into `order` and drops deleted ids.
     public func sortIfNeeded(force: Bool = false) {
-        guard force || !unsorted.isEmpty || order.count != liveCount else { return }
+        guard force || needsSort else { return }
+        install(order: computedOrder())
+    }
+
+    public var needsSort: Bool { !unsorted.isEmpty || order.count != liveCount }
+
+    /// The live ids in name order. Reads only, so it can run under a shared lock; install the
+    /// result with `install(order:)` before anything else changes the index.
+    public func computedOrder() -> [Int32] {
         var all = order.filter { !records[Int($0)].isDeleted }
         all.append(contentsOf: unsorted.filter { !records[Int($0)].isDeleted })
         all.sort(by: lowerBytesLess)
-        order = all
+        return all
+    }
+
+    public func install(order newOrder: [Int32]) {
+        order = newOrder
         unsorted = []
         rebuildRank()
     }
@@ -261,6 +293,7 @@ public final class FileIndex {
         order = other.order
         unsorted = other.unsorted
         rank = other.rank
+        rootIdList = other.rootIdList
         deletedCount = other.deletedCount
         volumeState = other.volumeState
     }
@@ -274,8 +307,10 @@ public final class FileIndex {
         for (i, r) in records.enumerated() where !r.isDeleted {
             let parent: Int32 = r.parent >= 0 ? (map[r.parent] ?? -2) : -1
             if parent == -2 { continue }
-            let newId = out.append(name: name(of: Int32(i)), parent: parent,
-                                   isDirectory: r.isDirectory, size: r.size, modified: r.modified)
+            let ns = Int(r.nameStart), ls = Int(r.lowerStart)
+            let newId = out.appendRaw(bytes: names[ns..<ns + Int(r.nameLength)],
+                                      lower: lowerNames[ls..<ls + Int(r.lowerLength)], parent: parent,
+                                      isDirectory: r.isDirectory, size: r.size, modified: r.modified)
             map[Int32(i)] = newId
         }
         out.sortIfNeeded(force: true)

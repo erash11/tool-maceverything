@@ -187,8 +187,15 @@ public final class IPCServer {
             while true {
                 let client = accept(listener, nil, nil)
                 if client < 0 {
-                    if errno == EINTR { continue }
-                    return
+                    switch errno {
+                    case EINTR, ECONNABORTED, EAGAIN:
+                        continue // a client gave up, or a signal: keep serving
+                    case EMFILE, ENFILE, ENOBUFS, ENOMEM:
+                        usleep(100_000) // out of descriptors or buffers: back off, keep serving
+                        continue
+                    default:
+                        return // the listening socket was closed (stop())
+                    }
                 }
                 guard let self else { close(client); return }
                 IPC.disableSigPipe(client)

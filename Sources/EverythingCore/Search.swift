@@ -103,10 +103,10 @@ struct CompiledQuery {
                 slotStart.append(addBytes(suffix))
                 slotLength.append(suffix.count)
             }
-        case let .size(cmp, value):
-            t.kind = Kind.size; t.cmp = CompiledQuery.cmpCode(cmp); t.a = value
-        case let .modified(cmp, start, end):
-            t.kind = Kind.modified; t.cmp = CompiledQuery.cmpCode(cmp); t.a = start; t.b = end
+        case let .size(cmp, value, neg):
+            t.kind = Kind.size; t.negated = neg; t.cmp = CompiledQuery.cmpCode(cmp); t.a = value
+        case let .modified(cmp, start, end, neg):
+            t.kind = Kind.modified; t.negated = neg; t.cmp = CompiledQuery.cmpCode(cmp); t.a = start; t.b = end
         case .filesOnly:
             t.kind = Kind.files
         case .foldersOnly:

@@ -138,4 +138,32 @@ final class IndexTests: XCTestCase {
         }
         XCTAssertTrue(Query.parse("size:nanb").isEmpty)
     }
+
+    func testNegatedFilters() {
+        let index = makeIndex()
+        XCTAssertEqual(names(index, "file: !size:>1gb"), ["notes.txt", "q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "!file:"), ["/data", "film", "Reports"])
+        XCTAssertEqual(names(index, "report !folder:"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "file: dm:<1970-01-02").count, 4)
+        XCTAssertEqual(names(index, "file: !dm:<1970-01-02"), [])
+    }
+
+    func testRegexAlternationIsNotSplit() {
+        XCTAssertEqual(names(makeIndex(), "regex:\\.(pdf|mp4)$"), ["game1.mp4", "q1 report.pdf"])
+        XCTAssertEqual(Query.parse("regex:^(a|b)$").groups.count, 1)
+    }
+
+    func testEmptyingAHugeFolderIsLinear() {
+        let index = FileIndex()
+        let root = index.addRoot("/big")
+        for i in 0..<100_000 {
+            index.add(ScannedEntry(name: "f\(i)", isDirectory: false, size: 0, modified: 0), parent: root)
+        }
+        let started = Date()
+        index.replaceChildren(of: root, with: [ScannedEntry(name: "f7", isDirectory: false, size: 1, modified: 0)])
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2.0)
+        XCTAssertEqual(index.liveCount, 2)
+        XCTAssertEqual(index.childIds(of: root).count, 1)
+        XCTAssertNotNil(index.lookup("/big/f7"))
+    }
 }

@@ -149,6 +149,7 @@ extension FileIndex {
             children[r.parent, default: []].append(Int32(i))
         }
         index.children = children
+        index.rootIdList = records.indices.filter { records[$0].parent < 0 }.map { Int32($0) }
         index.rebuildRank()
         return index
     }
