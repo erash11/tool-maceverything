@@ -106,6 +106,15 @@ final class MacTests: XCTestCase {
         again.stop()
     }
 
+    func testConcurrentRescansAreSerialized() {
+        let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-rescan.bin"))
+        service.start()
+        DispatchQueue.concurrentPerform(iterations: 8) { _ in _ = service.handle(IPCRequest(command: "rescan")) }
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertEqual(service.index.read { $0.search(Query.parse("two.pdf")).total }, 1)
+        service.stop()
+    }
+
     func testIPCRoundTrip() throws {
         let socketPath = "/tmp/mev-\(UUID().uuidString.prefix(8)).sock"
         let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-ipc.bin"))
