@@ -42,6 +42,8 @@ public final class FileIndex {
     /// Live record ids sorted by lowercase name. Ids appended since the last sort live in `unsorted`.
     var order: [Int32] = []
     var unsorted: [Int32] = []
+    /// rank[id] = position of id in `order`, or -1 when the id is not in `order`.
+    var rank: [Int32] = []
     public internal(set) var deletedCount = 0
 
     /// Saved FSEvents state per root path.
@@ -167,6 +169,7 @@ public final class FileIndex {
         names.append(contentsOf: bytes)
         lowerNames.append(contentsOf: lower)
         records.append(record)
+        rank.append(-1)
         if parent >= 0 { children[parent, default: []].append(id) }
         unsorted.append(id)
         return id
@@ -237,6 +240,13 @@ public final class FileIndex {
         all.sort(by: lowerBytesLess)
         order = all
         unsorted = []
+        rebuildRank()
+    }
+
+    func rebuildRank() {
+        var r = [Int32](repeating: -1, count: records.count)
+        for (i, id) in order.enumerated() { r[Int(id)] = Int32(i) }
+        rank = r
     }
 
     /// Takes over another index's contents, so holders of this instance see the new data.
@@ -247,6 +257,7 @@ public final class FileIndex {
         children = other.children
         order = other.order
         unsorted = other.unsorted
+        rank = other.rank
         deletedCount = other.deletedCount
         volumeState = other.volumeState
     }

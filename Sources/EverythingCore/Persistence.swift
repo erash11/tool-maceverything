@@ -97,6 +97,7 @@ extension FileIndex {
             children[r.parent, default: []].append(Int32(i))
         }
         index.children = children
+        index.rebuildRank()
         return index
     }
 }

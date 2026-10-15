@@ -32,182 +32,386 @@ public struct SearchResult: Codable {
     public var milliseconds: Double
 }
 
+// MARK: - Compiled query
+
+/// A query flattened into plain values, so the per-record loop does no reference counting.
+struct CompiledQuery {
+    struct Term {
+        var kind: UInt8      // see Kind
+        var negated: Bool
+        var start: Int       // byte offset into `bytes`, slot index (ext) or regex index
+        var length: Int      // byte length, or slot count (ext)
+        var cmp: UInt8
+        var a: Int64
+        var b: Int64
+    }
+
+    enum Kind {
+        static let contains: UInt8 = 0, path: UInt8 = 1, glob: UInt8 = 2, regex: UInt8 = 3, ext: UInt8 = 4
+        static let size: UInt8 = 5, modified: UInt8 = 6, files: UInt8 = 7, folders: UInt8 = 8
+    }
+
+    var terms: [Term] = []
+    var groupStart: [Int] = []
+    var groupCount: [Int] = []
+    var bytes: [UInt8] = []
+    var slotStart: [Int] = []
+    var slotLength: [Int] = []
+    var regexes: [NSRegularExpression?] = []
+    var needsPath = false
+
+    init(_ query: Query) {
+        for group in query.groups {
+            groupStart.append(terms.count)
+            groupCount.append(group.count)
+            for term in group { terms.append(compile(term)) }
+        }
+    }
+
+    private mutating func addBytes(_ b: [UInt8]) -> Int {
+        let start = bytes.count
+        bytes.append(contentsOf: b)
+        return start
+    }
+
+    private static func cmpCode(_ c: Query.Comparison) -> UInt8 {
+        switch c {
+        case .less: return 0
+        case .lessOrEqual: return 1
+        case .greater: return 2
+        case .greaterOrEqual: return 3
+        case .equal: return 4
+        }
+    }
+
+    private mutating func compile(_ term: Query.Term) -> Term {
+        var t = Term(kind: 0, negated: false, start: 0, length: 0, cmp: 0, a: 0, b: 0)
+        switch term {
+        case let .contains(n, neg):
+            t.kind = Kind.contains; t.negated = neg; t.start = addBytes(n); t.length = n.count
+        case let .pathContains(n, neg):
+            t.kind = Kind.path; t.negated = neg; t.start = addBytes(n); t.length = n.count
+            needsPath = true
+        case let .glob(n, neg):
+            t.kind = Kind.glob; t.negated = neg; t.start = addBytes(n); t.length = n.count
+        case let .regex(pattern, neg):
+            t.kind = Kind.regex; t.negated = neg; t.start = regexes.count
+            regexes.append(try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]))
+        case let .ext(list, neg):
+            t.kind = Kind.ext; t.negated = neg; t.start = slotStart.count; t.length = list.count
+            for suffix in list {
+                slotStart.append(addBytes(suffix))
+                slotLength.append(suffix.count)
+            }
+        case let .size(cmp, value):
+            t.kind = Kind.size; t.cmp = CompiledQuery.cmpCode(cmp); t.a = value
+        case let .modified(cmp, start, end):
+            t.kind = Kind.modified; t.cmp = CompiledQuery.cmpCode(cmp); t.a = start; t.b = end
+        case .filesOnly:
+            t.kind = Kind.files
+        case .foldersOnly:
+            t.kind = Kind.folders
+        }
+        return t
+    }
+}
+
+// MARK: - Search
+
 extension FileIndex {
     /// Runs `query` across every live record, split over all CPU cores.
     public func search(_ query: Query, options: SearchOptions = SearchOptions()) -> SearchResult {
         let started = DispatchTime.now().uptimeNanoseconds
-        let ids = matchingIds(query)
-        var sorted = ids
+        let matched = matchingIdsInIdOrder(query)
+        let total = matched.count
+        let offset = min(max(options.offset, 0), total)
+        let limit = max(options.limit, 0)
+        let end = limit >= total - offset ? total : offset + limit
+
+        let page: [Int32]
         switch options.sort {
         case .name:
-            if options.descending { sorted.reverse() }
+            page = Array(nameOrdered(matched, first: end, descending: options.descending)[offset..<end])
         case .path:
-            let paths = Dictionary(uniqueKeysWithValues: ids.map { ($0, path(of: $0).lowercased()) })
-            sorted.sort { options.descending ? paths[$0]! > paths[$1]! : paths[$0]! < paths[$1]! }
-        case .size:
+            let paths = matched.map { path(of: $0).lowercased() }
+            var idx = Array(0..<matched.count)
+            idx.sort { options.descending ? paths[$0] > paths[$1] : paths[$0] < paths[$1] }
+            page = idx[offset..<end].map { matched[$0] }
+        case .size, .modified:
+            let bySize = options.sort == .size
+            var sorted = matched
             sorted.sort {
-                let a = records[Int($0)].size, b = records[Int($1)].size
+                let ra = records[Int($0)], rb = records[Int($1)]
+                let a = bySize ? ra.size : ra.modified, b = bySize ? rb.size : rb.modified
                 return options.descending ? a > b : a < b
             }
-        case .modified:
-            sorted.sort {
-                let a = records[Int($0)].modified, b = records[Int($1)].modified
-                return options.descending ? a > b : a < b
-            }
+            page = Array(sorted[offset..<end])
         }
-        let lo = min(options.offset, sorted.count)
-        let wanted = max(options.limit, 0)
-        let hi = wanted >= sorted.count - lo ? sorted.count : lo + wanted
-        let hits = sorted[lo..<hi].map { id -> SearchHit in
+
+        let hits = page.map { id -> SearchHit in
             let r = records[Int(id)]
             return SearchHit(path: path(of: id), name: name(of: id), isDirectory: r.isDirectory,
                              size: r.size, modified: r.modified)
         }
         let ms = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
-        return SearchResult(total: ids.count, hits: hits, milliseconds: ms)
+        return SearchResult(total: total, hits: hits, milliseconds: ms)
     }
 
     /// Ids of live records matching `query`, in name order.
     public func matchingIds(_ query: Query) -> [Int32] {
-        let regexes = compileRegexes(query)
-        let fromOrder = scan(order, query, regexes)
-        if unsorted.isEmpty { return fromOrder }
-        var extra = scan(unsorted, query, regexes)
-        extra.sort(by: lowerBytesLess)
-        return merge(fromOrder, extra)
+        let ids = matchingIdsInIdOrder(query)
+        return nameOrdered(ids, first: ids.count, descending: false)
     }
 
-    private func compileRegexes(_ query: Query) -> [String: NSRegularExpression] {
-        var out: [String: NSRegularExpression] = [:]
-        for group in query.groups {
-            for term in group {
-                if case let .regex(pattern, _) = term, out[pattern] == nil {
-                    out[pattern] = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
-                }
+    /// The first `first` of `ids` in name order. Uses each id's rank in the presorted `order`
+    /// (a bitmap walk, no comparisons) and merges in ids added since the last sort.
+    func nameOrdered(_ ids: [Int32], first: Int, descending: Bool) -> [Int32] {
+        if first == 0 { return [] }
+        var unranked: [Int32] = []
+        var bits = [UInt64](repeating: 0, count: (order.count + 63) / 64)
+        for id in ids {
+            let rk = rank[Int(id)]
+            if rk >= 0 {
+                bits[Int(rk) >> 6] |= 1 << UInt64(rk & 63)
+            } else {
+                unranked.append(id)
             }
         }
-        return out
-    }
-
-    private func merge(_ a: [Int32], _ b: [Int32]) -> [Int32] {
+        var ranked: [Int32] = []
+        ranked.reserveCapacity(min(first, ids.count))
+        if descending {
+            var w = bits.count - 1
+            while w >= 0 && ranked.count < first {
+                var word = bits[w]
+                while word != 0 && ranked.count < first {
+                    let bit = 63 - word.leadingZeroBitCount
+                    ranked.append(order[w * 64 + bit])
+                    word &= ~(UInt64(1) << UInt64(bit))
+                }
+                w -= 1
+            }
+        } else {
+            var w = 0
+            while w < bits.count && ranked.count < first {
+                var word = bits[w]
+                while word != 0 && ranked.count < first {
+                    let bit = word.trailingZeroBitCount
+                    ranked.append(order[w * 64 + bit])
+                    word &= word - 1
+                }
+                w += 1
+            }
+        }
+        if unranked.isEmpty { return ranked }
+        unranked.sort(by: lowerBytesLess)
+        if descending { unranked.reverse() }
         var out: [Int32] = []
-        out.reserveCapacity(a.count + b.count)
+        out.reserveCapacity(min(first, ranked.count + unranked.count))
         var i = 0, j = 0
-        while i < a.count && j < b.count {
-            if lowerBytesLess(b[j], a[i]) { out.append(b[j]); j += 1 } else { out.append(a[i]); i += 1 }
+        while out.count < first && (i < ranked.count || j < unranked.count) {
+            let takeUnranked: Bool
+            if i >= ranked.count {
+                takeUnranked = true
+            } else if j >= unranked.count {
+                takeUnranked = false
+            } else {
+                takeUnranked = descending ? lowerBytesLess(ranked[i], unranked[j])
+                                          : lowerBytesLess(unranked[j], ranked[i])
+            }
+            if takeUnranked { out.append(unranked[j]); j += 1 } else { out.append(ranked[i]); i += 1 }
         }
-        out.append(contentsOf: a[i...])
-        out.append(contentsOf: b[j...])
         return out
     }
 
-    private func scan(_ ids: [Int32], _ query: Query, _ regexes: [String: NSRegularExpression]) -> [Int32] {
-        if ids.isEmpty { return [] }
-        let chunkCount = max(1, min(ProcessInfo.processInfo.activeProcessorCount * 4, ids.count / 4096 + 1))
-        let chunkSize = (ids.count + chunkCount - 1) / chunkCount
+    /// Scans records in memory order (sequential reads), split into chunks across cores.
+    func matchingIdsInIdOrder(_ query: Query) -> [Int32] {
+        let compiled = CompiledQuery(query)
+        let count = records.count
+        if count == 0 { return [] }
+        let cores = ProcessInfo.processInfo.activeProcessorCount
+        let chunkCount = max(1, min(cores * 4, (count + 16_383) / 16_384))
+        let chunkSize = (count + chunkCount - 1) / chunkCount
         var partial = [[Int32]](repeating: [], count: chunkCount)
-        let partialLock = NSLock()
+
         records.withUnsafeBufferPointer { recs in
-            lowerNames.withUnsafeBufferPointer { lower in
-                ids.withUnsafeBufferPointer { idBuf in
-                    DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
-                        let lo = chunk * chunkSize
-                        let hi = min(lo + chunkSize, idBuf.count)
-                        if lo >= hi { return }
-                        var found: [Int32] = []
-                        var pathCache: [Int32: [UInt8]] = [:]
-                        for k in lo..<hi {
-                            let id = idBuf[k]
-                            let r = recs[Int(id)]
-                            if r.isDeleted { continue }
-                            if matches(query, id: id, record: r, recs: recs, lower: lower,
-                                       regexes: regexes, pathCache: &pathCache) {
-                                found.append(id)
-                            }
-                        }
-                        partialLock.lock()
-                        partial[chunk] = found
-                        partialLock.unlock()
-                    }
+        lowerNames.withUnsafeBufferPointer { lower in
+        compiled.terms.withUnsafeBufferPointer { terms in
+        compiled.bytes.withUnsafeBufferPointer { qbytes in
+        compiled.slotStart.withUnsafeBufferPointer { slotStart in
+        compiled.slotLength.withUnsafeBufferPointer { slotLength in
+        compiled.groupStart.withUnsafeBufferPointer { groupStart in
+        compiled.groupCount.withUnsafeBufferPointer { groupCount in
+        partial.withUnsafeMutableBufferPointer { out in
+            let ctx = MatchContext(recs: recs, lower: lower, terms: terms, qbytes: qbytes,
+                                   slotStart: slotStart, slotLength: slotLength,
+                                   groupStart: groupStart, groupCount: groupCount,
+                                   regexes: compiled.regexes)
+            DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
+                let lo = chunk * chunkSize
+                let hi = min(lo + chunkSize, count)
+                if lo >= hi { return }
+                var found: [Int32] = []
+                var pathCache: [Int32: [UInt8]] = [:]
+                for id in lo..<hi {
+                    let r = recs[id]
+                    if r.flags & 2 != 0 { continue }
+                    if ctx.matches(r, pathCache: &pathCache) { found.append(Int32(id)) }
                 }
+                out[chunk] = found
             }
-        }
+        }}}}}}}}}
         return partial.flatMap { $0 }
     }
+}
 
-    private func matches(_ query: Query, id: Int32, record r: Record,
-                         recs: UnsafeBufferPointer<Record>, lower: UnsafeBufferPointer<UInt8>,
-                         regexes: [String: NSRegularExpression],
-                         pathCache: inout [Int32: [UInt8]]) -> Bool {
+/// Everything the per-record test reads, as unsafe buffers.
+struct MatchContext {
+    let recs: UnsafeBufferPointer<Record>
+    let lower: UnsafeBufferPointer<UInt8>
+    let terms: UnsafeBufferPointer<CompiledQuery.Term>
+    let qbytes: UnsafeBufferPointer<UInt8>
+    let slotStart: UnsafeBufferPointer<Int>
+    let slotLength: UnsafeBufferPointer<Int>
+    let groupStart: UnsafeBufferPointer<Int>
+    let groupCount: UnsafeBufferPointer<Int>
+    let regexes: [NSRegularExpression?]
+
+    @inline(__always)
+    func compare(_ v: Int64, _ cmp: UInt8, _ target: Int64) -> Bool {
+        switch cmp {
+        case 0: return v < target
+        case 1: return v <= target
+        case 2: return v > target
+        case 3: return v >= target
+        default: return v == target
+        }
+    }
+
+    func matches(_ r: Record, pathCache: inout [Int32: [UInt8]]) -> Bool {
         let start = Int(r.lowerStart), len = Int(r.lowerLength)
-        for group in query.groups {
+        let groups = groupStart.count
+        var g = 0
+        while g < groups {
+            let first = groupStart[g], n = groupCount[g]
             var any = false
-            for term in group {
-                let hit: Bool
-                switch term {
-                case let .contains(needle, negated):
-                    hit = bytesContain(lower, start, len, needle) != negated
-                case let .glob(pattern, negated):
-                    hit = globMatch(lower, start, len, pattern) != negated
-                case let .ext(suffixes, negated):
-                    hit = suffixes.contains { bytesHaveSuffix(lower, start, len, $0) } != negated
-                case let .pathContains(needle, negated):
-                    var full = parentPath(r.parent, recs: recs, lower: lower, cache: &pathCache)
+            var k = first
+            while k < first + n {
+                let t = terms[k]
+                var hit: Bool
+                switch t.kind {
+                case CompiledQuery.Kind.contains:
+                    hit = containsBytes(lower, start, len, qbytes, t.start, t.length)
+                case CompiledQuery.Kind.glob:
+                    hit = globBytes(lower, start, len, qbytes, t.start, t.length)
+                case CompiledQuery.Kind.ext:
+                    hit = false
+                    for s in t.start..<t.start + t.length
+                    where suffixBytes(lower, start, len, qbytes, slotStart[s], slotLength[s]) {
+                        hit = true
+                        break
+                    }
+                case CompiledQuery.Kind.path:
+                    var full = parentPath(r.parent, cache: &pathCache)
                     if !full.isEmpty && full.last != UInt8(ascii: "/") { full.append(UInt8(ascii: "/")) }
                     full.append(contentsOf: lower[start..<start + len])
-                    let found = full.withUnsafeBufferPointer { bytesContain($0, 0, $0.count, needle) }
-                    hit = found != negated
-                case let .regex(pattern, negated):
-                    if let re = regexes[pattern] {
+                    hit = full.withUnsafeBufferPointer { containsBytes($0, 0, $0.count, qbytes, t.start, t.length) }
+                case CompiledQuery.Kind.regex:
+                    if let re = regexes[t.start] {
                         let s = String(decoding: UnsafeBufferPointer(rebasing: lower[start..<start + len]), as: UTF8.self)
-                        let found = re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
-                        hit = found != negated
+                        hit = re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
                     } else {
                         hit = false
                     }
-                case let .size(cmp, value):
-                    hit = !r.isDirectory && compare(r.size, cmp, value)
-                case let .modified(cmp, dayStart, dayEnd):
-                    switch cmp {
-                    case .equal: hit = r.modified >= dayStart && r.modified < dayEnd
-                    case .greater: hit = r.modified >= dayEnd
-                    case .greaterOrEqual: hit = r.modified >= dayStart
-                    case .less: hit = r.modified < dayStart
-                    case .lessOrEqual: hit = r.modified < dayEnd
+                case CompiledQuery.Kind.size:
+                    hit = r.flags & 1 == 0 && compare(r.size, t.cmp, t.a)
+                case CompiledQuery.Kind.modified:
+                    switch t.cmp {
+                    case 4: hit = r.modified >= t.a && r.modified < t.b
+                    case 2: hit = r.modified >= t.b
+                    case 3: hit = r.modified >= t.a
+                    case 0: hit = r.modified < t.a
+                    default: hit = r.modified < t.b
                     }
-                case .filesOnly:
-                    hit = !r.isDirectory
-                case .foldersOnly:
-                    hit = r.isDirectory
+                case CompiledQuery.Kind.files:
+                    hit = r.flags & 1 == 0
+                default:
+                    hit = r.flags & 1 != 0
                 }
+                if t.negated { hit = !hit }
                 if hit { any = true; break }
+                k += 1
             }
             if !any { return false }
+            g += 1
         }
         return true
     }
 
-    private func compare(_ a: Int64, _ cmp: Query.Comparison, _ b: Int64) -> Bool {
-        switch cmp {
-        case .less: return a < b
-        case .lessOrEqual: return a <= b
-        case .greater: return a > b
-        case .greaterOrEqual: return a >= b
-        case .equal: return a == b
-        }
-    }
-
-    /// Lowercase full path of a directory, cached per search chunk because siblings share it.
-    private func parentPath(_ id: Int32, recs: UnsafeBufferPointer<Record>, lower: UnsafeBufferPointer<UInt8>,
-                            cache: inout [Int32: [UInt8]]) -> [UInt8] {
+    /// Lowercase full path of a directory, cached per chunk because siblings share it.
+    func parentPath(_ id: Int32, cache: inout [Int32: [UInt8]]) -> [UInt8] {
         if id < 0 { return [] }
         if let hit = cache[id] { return hit }
         let r = recs[Int(id)]
-        var out = parentPath(r.parent, recs: recs, lower: lower, cache: &cache)
+        var out = parentPath(r.parent, cache: &cache)
         if !out.isEmpty && out.last != UInt8(ascii: "/") { out.append(UInt8(ascii: "/")) }
         let s = Int(r.lowerStart)
         out.append(contentsOf: lower[s..<s + Int(r.lowerLength)])
         cache[id] = out
         return out
     }
+}
+
+// MARK: - Byte matching
+
+@inline(__always)
+func containsBytes(_ hay: UnsafeBufferPointer<UInt8>, _ start: Int, _ len: Int,
+                   _ needle: UnsafeBufferPointer<UInt8>, _ nStart: Int, _ n: Int) -> Bool {
+    if n == 0 { return true }
+    if n > len { return false }
+    let first = needle[nStart]
+    var i = start
+    let last = start + len - n
+    while i <= last {
+        if hay[i] == first {
+            var j = 1
+            while j < n && hay[i + j] == needle[nStart + j] { j += 1 }
+            if j == n { return true }
+        }
+        i += 1
+    }
+    return false
+}
+
+/// Matches `*` and `?` against the whole name.
+func globBytes(_ hay: UnsafeBufferPointer<UInt8>, _ start: Int, _ len: Int,
+               _ pattern: UnsafeBufferPointer<UInt8>, _ pStart: Int, _ pLen: Int) -> Bool {
+    let star = UInt8(ascii: "*"), question = UInt8(ascii: "?")
+    var s = 0, p = 0
+    var starP = -1, starS = 0
+    while s < len {
+        if p < pLen && (pattern[pStart + p] == question || pattern[pStart + p] == hay[start + s]) {
+            s += 1; p += 1
+        } else if p < pLen && pattern[pStart + p] == star {
+            starP = p; starS = s; p += 1
+        } else if starP >= 0 {
+            p = starP + 1; starS += 1; s = starS
+        } else {
+            return false
+        }
+    }
+    while p < pLen && pattern[pStart + p] == star { p += 1 }
+    return p == pLen
+}
+
+@inline(__always)
+func suffixBytes(_ hay: UnsafeBufferPointer<UInt8>, _ start: Int, _ len: Int,
+                 _ suffix: UnsafeBufferPointer<UInt8>, _ sStart: Int, _ n: Int) -> Bool {
+    if n > len { return false }
+    let off = start + len - n
+    var i = 0
+    while i < n {
+        if hay[off + i] != suffix[sStart + i] { return false }
+        i += 1
+    }
+    return true
 }
