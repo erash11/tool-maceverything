@@ -251,11 +251,11 @@ extension FileIndex {
                 let hi = min(lo + chunkSize, count)
                 if lo >= hi { return }
                 var found: [Int32] = []
-                var pathCache: [Int32: [UInt8]] = [:]
+                var paths = PathCache()
                 for id in lo..<hi {
                     let r = recs[id]
                     if r.flags & 2 != 0 { continue }
-                    if ctx.matches(r, pathCache: &pathCache) { found.append(Int32(id)) }
+                    if ctx.matches(r, paths: &paths) { found.append(Int32(id)) }
                 }
                 out[chunk] = found
             }
@@ -287,7 +287,7 @@ struct MatchContext {
         }
     }
 
-    func matches(_ r: Record, pathCache: inout [Int32: [UInt8]]) -> Bool {
+    func matches(_ r: Record, paths: inout PathCache) -> Bool {
         let start = Int(r.lowerStart), len = Int(r.lowerLength)
         let groups = groupStart.count
         var g = 0
@@ -311,10 +311,7 @@ struct MatchContext {
                         break
                     }
                 case CompiledQuery.Kind.path:
-                    var full = parentPath(r.parent, cache: &pathCache)
-                    if !full.isEmpty && full.last != UInt8(ascii: "/") { full.append(UInt8(ascii: "/")) }
-                    full.append(contentsOf: lower[start..<start + len])
-                    hit = full.withUnsafeBufferPointer { containsBytes($0, 0, $0.count, qbytes, t.start, t.length) }
+                    hit = pathContains(r, start, len, t, &paths)
                 case CompiledQuery.Kind.regex:
                     if let re = regexes[t.start] {
                         let s = String(decoding: UnsafeBufferPointer(rebasing: lower[start..<start + len]), as: UTF8.self)
@@ -345,6 +342,26 @@ struct MatchContext {
             g += 1
         }
         return true
+    }
+
+    /// Does "parent path / name" contain the needle? Siblings are stored next to each other,
+    /// so the parent's answer and the tail of its path are reused across consecutive records.
+    func pathContains(_ r: Record, _ start: Int, _ len: Int, _ t: CompiledQuery.Term,
+                      _ paths: inout PathCache) -> Bool {
+        if r.parent != paths.lastParent || paths.lastTerm != t.start {
+            let full = parentPath(r.parent, cache: &paths.dirs)
+            paths.lastParent = r.parent
+            paths.lastTerm = t.start
+            paths.parentHit = full.withUnsafeBufferPointer { containsBytes($0, 0, $0.count, qbytes, t.start, t.length) }
+            // Only the last (needle length - 1) bytes can start a match that runs into the name.
+            var tail = Array(full.suffix(max(t.length - 1, 0)))
+            if !full.isEmpty && full.last != UInt8(ascii: "/") { tail.append(UInt8(ascii: "/")) }
+            paths.tail = tail
+        }
+        if paths.parentHit { return true }
+        var joined = paths.tail
+        joined.append(contentsOf: lower[start..<start + len])
+        return joined.withUnsafeBufferPointer { containsBytes($0, 0, $0.count, qbytes, t.start, t.length) }
     }
 
     /// Lowercase full path of a directory, cached per chunk because siblings share it.
@@ -414,4 +431,13 @@ func suffixBytes(_ hay: UnsafeBufferPointer<UInt8>, _ start: Int, _ len: Int,
         i += 1
     }
     return true
+}
+
+/// Per-chunk scratch state for path terms.
+struct PathCache {
+    var dirs: [Int32: [UInt8]] = [:]
+    var lastParent: Int32 = -2
+    var lastTerm = -1
+    var parentHit = false
+    var tail: [UInt8] = []
 }
