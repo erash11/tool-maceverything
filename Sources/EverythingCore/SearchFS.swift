@@ -172,6 +172,7 @@ public enum SearchFS {
     public struct TreeStats {
         public var added = 0
         public var unreachable = 0
+        public var rootId: UInt64 = 0
     }
 
     /// Adds the entries reachable from the volume root (by parent id) under `root`.
@@ -179,11 +180,20 @@ public enum SearchFS {
     @discardableResult
     public static func buildTree(_ entries: [Entry], volumePath: String, into index: FileIndex, root: Int32) -> TreeStats {
         var st = stat()
-        guard lstat(volumePath, &st) == 0 else { return TreeStats(added: 0, unreachable: entries.count) }
+        guard lstat(volumePath, &st) == 0 else { return TreeStats(added: 0, unreachable: entries.count, rootId: 0) }
         var byParent: [UInt64: [Int]] = [:]
         for (i, e) in entries.enumerated() where e.id != e.parent { byParent[e.parent, default: []].append(i) }
+        // The volume root is not itself returned. Use its inode when entries point at it;
+        // otherwise (as on the boot Data volume) the parent id that is never an entry and has
+        // the most children.
+        var rootId = UInt64(st.st_ino)
+        if byParent[rootId] == nil {
+            let ids = Set(entries.map(\.id))
+            rootId = byParent.filter { !ids.contains($0.key) }.max { $0.value.count < $1.value.count }?.key ?? rootId
+        }
         var stats = TreeStats()
-        var queue: [(UInt64, Int32)] = [(UInt64(st.st_ino), root)]
+        stats.rootId = rootId
+        var queue: [(UInt64, Int32)] = [(rootId, root)]
         var head = 0
         while head < queue.count {
             let (dirId, recordId) = queue[head]

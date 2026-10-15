@@ -151,8 +151,8 @@ func runSearchFSBench(_ volume: String) {
     let t0 = Date()
     let tree = SearchFS.buildTree(found.entries, volumePath: volume, into: viaSearch, root: searchRoot)
     let buildSeconds = Date().timeIntervalSince(t0)
-    print(String(format: "  searchfs: %ld entries in %ld calls, %.2f s; tree %.2f s (%ld placed, %ld unreachable)",
-                 found.entries.count, found.calls, found.seconds, buildSeconds, tree.added, tree.unreachable))
+    print(String(format: "  searchfs: %ld entries in %ld calls, %.2f s; tree %.2f s (%ld placed, %ld unreachable, root id %llu)",
+                 found.entries.count, found.calls, found.seconds, buildSeconds, tree.added, tree.unreachable, tree.rootId))
 
     let viaWalk = FileIndex()
     let walkRoot = viaWalk.addRoot(volume)
