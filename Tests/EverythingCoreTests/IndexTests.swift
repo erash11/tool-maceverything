@@ -200,7 +200,9 @@ final class IndexTests: XCTestCase {
     func testRegexMatchesBruteForceAcrossAccents() throws {
         let index = makeDeepIndex()
         let all = (0..<Int32(index.records.count)).filter { !index.records[Int($0)].isDeleted }
-        for pattern in ["^[0-9]+$", "\\.plist$", "^lib.*\\.dylib$", "^img_\\d+", "ée\\d", "^thrée\\d+\\.md$", "^a1", "(jpg|md)$", "zzz"] {
+        for pattern in ["^[0-9]+$", "\\.plist$", "^lib.*\\.dylib$", "^img_\\d+", "ée\\d", "^thrée\\d+\\.md$", "^a1", "(jpg|md)$",
+                        // Not line-safe, or spanning names: these take the per-name fallback.
+                        "a[^q]*txt", "^a(?=1)", "^(?i)A", "\\.txt\\s?$", "zzz"] {
             let re = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
             let expected = Set(all.filter { id in
                 let s = FileIndex.searchForm(index.name(of: id))
@@ -222,5 +224,14 @@ final class IndexTests: XCTestCase {
         XCTAssertNil(RegexSupport.requiredLiteral("(jpg|png)$"))
         XCTAssertNil(RegexSupport.requiredLiteral("a|b"))
         XCTAssertEqual(RegexSupport.requiredLiteral("x(abc)?yz"), "yz")
+    }
+
+    func testLineSafety() {
+        XCTAssertTrue(RegexSupport.isLineSafe("^img_\\d+\\.jpg$"))
+        XCTAssertTrue(RegexSupport.isLineSafe("(jpg|png)$"))
+        XCTAssertFalse(RegexSupport.isLineSafe("^a(?=1)"))
+        XCTAssertFalse(RegexSupport.isLineSafe("\\Afoo"))
+        XCTAssertFalse(RegexSupport.isLineSafe("a\\sb"))
+        XCTAssertFalse(RegexSupport.isLineSafe("a\\cJb"))
     }
 }
