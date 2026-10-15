@@ -78,6 +78,14 @@ public enum IPC {
         return addr
     }
 
+    /// A peer that hangs up must fail only its own request, not kill the process with SIGPIPE.
+    static func disableSigPipe(_ fd: Int32) {
+        #if canImport(Darwin)
+        var one: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        #endif
+    }
+
     static func readLine(_ fd: Int32) -> Data? {
         var data = Data()
         var buf = [UInt8](repeating: 0, count: 64 * 1024)
@@ -116,6 +124,7 @@ public enum IPC {
         #endif
         guard fd >= 0 else { throw IPCError.socket(String(cString: strerror(errno))) }
         defer { close(fd) }
+        disableSigPipe(fd)
         var addr = try makeAddress(socketPath)
         let rc = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -169,6 +178,7 @@ public final class IPCServer {
                     return
                 }
                 guard let self else { close(client); return }
+                IPC.disableSigPipe(client)
                 self.workers.async { self.serve(client) }
             }
         }

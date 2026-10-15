@@ -122,7 +122,10 @@ public struct Query {
         let units: [(String, Int64)] = [("tb", 1 << 40), ("gb", 1 << 30), ("mb", 1 << 20), ("kb", 1 << 10), ("b", 1)]
         for (suffix, mult) in units where s.hasSuffix(suffix) {
             guard let n = Double(s.dropLast(suffix.count)) else { return nil }
-            return Int64(n * Double(mult))
+            let bytes = n * Double(mult)
+            // Double(_:) accepts "nan", "inf" and 1e999; converting those to Int64 would trap.
+            guard bytes.isFinite, bytes >= 0, bytes < 9.2e18 else { return nil }
+            return Int64(bytes)
         }
         return Int64(s)
     }

@@ -11,6 +11,7 @@ let roots = config.roots ?? IndexService.defaultRoots(includeExternal: config.in
 var exclusions = Scanner.defaultExclusions
 for extra in config.exclusions ?? [] { exclusions.insert(IndexService.canonical(extra)) }
 
+signal(SIGPIPE, SIG_IGN)
 logLine("everythingd starting; roots: \(roots.joined(separator: ", "))")
 let service = IndexService(roots: roots, exclusions: exclusions, log: logLine)
 let server = IPCServer { service.handle($0) }

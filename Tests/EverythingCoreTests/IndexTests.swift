@@ -126,4 +126,16 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(r.total, 4)
         XCTAssertEqual(r.hits.map(\.name), ["game1.mp4", "q1 report.pdf"])
     }
+
+    func testHostileInputDoesNotTrap() {
+        let index = makeIndex()
+        let r = index.search(Query.parse("report"), options: SearchOptions(limit: 5, offset: -1))
+        XCTAssertEqual(r.hits.count, 3)
+        XCTAssertEqual(index.search(Query.parse("report"), options: SearchOptions(limit: -4)).hits.count, 0)
+        XCTAssertEqual(index.search(Query.parse("report"), options: SearchOptions(limit: Int.max, offset: 2)).hits.count, 1)
+        for q in ["size:nanb", "size:infgb", "size:1e999b", "size:-5kb", "dm:99999999-1-1", "regex:([", "ext:", "path:"] {
+            _ = index.search(Query.parse(q))
+        }
+        XCTAssertTrue(Query.parse("size:nanb").isEmpty)
+    }
 }

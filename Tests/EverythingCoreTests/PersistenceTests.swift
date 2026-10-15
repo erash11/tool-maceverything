@@ -28,4 +28,26 @@ final class PersistenceTests: XCTestCase {
         try Data("hello world, not an index".utf8).write(to: url)
         XCTAssertThrowsError(try FileIndex.load(from: url))
     }
+
+    func testRejectsOutOfRangeNameOffsets() throws {
+        let index = IndexTests().makeIndex()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try index.save(to: url)
+        var bytes = [UInt8](try Data(contentsOf: url))
+        let metaCount = bytes[44..<52].enumerated().reduce(0) { $0 | Int($1.element) << (8 * $1.offset) }
+        let nameStart = 52 + metaCount + FileIndex.recordBytes + 4 // record 1, nameStart field
+        for k in 0..<4 { bytes[nameStart + k] = 0xFF }
+        try Data(bytes).write(to: url)
+        XCTAssertThrowsError(try FileIndex.load(from: url)) { error in
+            XCTAssertTrue("\(error)".contains("corrupt"), "\(error)")
+        }
+    }
+
+    func testRejectsTruncatedFile() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try IndexTests().makeIndex().save(to: url)
+        let bytes = try Data(contentsOf: url)
+        try bytes.prefix(bytes.count - 3).write(to: url)
+        XCTAssertThrowsError(try FileIndex.load(from: url))
+    }
 }
