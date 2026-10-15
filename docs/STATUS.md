@@ -22,9 +22,9 @@
 - One CI run measured the first /Applications scan at 58 s (17 to 22 s in earlier runs). Likely
   runner noise from a cold disk cache; confirm on a real Mac.
 
-## Next
-- Run `./scripts/install.sh` on the Mac; record `ev --bench ~` and `ev --status` numbers
-  against the targets in the design doc.
-
-## Open questions
-- Is a custom tool worth it over Find Any File or HoudahSpot? Decide after a week of use.
+## Open work
+Tracked in GitHub issues: https://github.com/erash11/MacEverything/issues
+- Real-Mac testing: #2 (app, hotkey, install), #3 (first-scan time)
+- Performance: #4 (`path:` search), #5 (`regex:` search), #6 (`searchfs()` scanner)
+- Release: #7 (Developer ID signing)
+- Review and decisions: #8 (independent review of post-Codex fixes), #9 (build vs buy), #10 (remove review PR)
