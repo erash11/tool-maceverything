@@ -359,9 +359,23 @@ struct MatchContext {
             paths.tail = tail
         }
         if paths.parentHit { return true }
-        var joined = paths.tail
-        joined.append(contentsOf: lower[start..<start + len])
-        return joined.withUnsafeBufferPointer { containsBytes($0, 0, $0.count, qbytes, t.start, t.length) }
+        if containsBytes(lower, start, len, qbytes, t.start, t.length) { return true }
+        // Matches that start in the parent's tail and run into the name.
+        let tail = paths.tail
+        let n = t.length
+        var i = 0
+        while i < tail.count {
+            var j = 0
+            while j < n {
+                let pos = i + j
+                let b = pos < tail.count ? tail[pos] : (pos - tail.count < len ? lower[start + pos - tail.count] : 0)
+                if pos - tail.count >= len || b != qbytes[t.start + j] { break }
+                j += 1
+            }
+            if j == n { return true }
+            i += 1
+        }
+        return false
     }
 
     /// Lowercase full path of a directory, cached per chunk because siblings share it.
