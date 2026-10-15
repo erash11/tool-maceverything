@@ -146,6 +146,9 @@ case "--status":
         print("roots: \(s.roots.joined(separator: ", "))")
         if let secs = s.lastScanSeconds { print(String(format: "last full scan: %.1f s", secs)) }
         if let mem = s.memoryBytes { print("daemon memory: \(formatSize(Int64(mem)))") }
+        if let stale = s.unwatchedRoots, !stale.isEmpty {
+            print("warning: not watching \(stale.joined(separator: ", ")); results there may be stale (retried every minute)")
+        }
     } catch { fail("\(error)") }
 case "--rescan", "--save", "--sync":
     do {
