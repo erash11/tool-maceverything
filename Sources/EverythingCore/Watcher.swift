@@ -13,6 +13,8 @@ public final class Watcher {
         public var mustScanSubDirs: Bool
         public var rootChanged: Bool
         public var historyDone: Bool
+        /// The kernel or daemon dropped events: everything watched must be rescanned.
+        public var dropped: Bool = false
         public var id: UInt64
     }
 
@@ -91,6 +93,8 @@ public final class Watcher {
                     mustScanSubDirs: flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs) != 0,
                     rootChanged: flags & FSEventStreamEventFlags(kFSEventStreamEventFlagRootChanged) != 0,
                     historyDone: flags & FSEventStreamEventFlags(kFSEventStreamEventFlagHistoryDone) != 0,
+                    dropped: flags & FSEventStreamEventFlags(
+                        kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped) != 0,
                     id: UInt64(eventIds[i])))
             }
             watcher.handler(events)

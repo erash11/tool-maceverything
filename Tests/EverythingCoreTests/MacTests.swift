@@ -180,6 +180,21 @@ final class MacTests: XCTestCase {
         again.stop()
     }
 
+    func testEventTargets() {
+        func ev(_ path: String, scan: Bool = false, rootChanged: Bool = false, dropped: Bool = false) -> Watcher.Event {
+            Watcher.Event(path: path, mustScanSubDirs: scan, rootChanged: rootChanged, historyDone: false,
+                          dropped: dropped, id: 1)
+        }
+        let root = "/Users/me"
+        XCTAssertTrue(IndexService.target(for: ev("/Users/me/Docs/"), root: root)! == ("/Users/me/Docs", false))
+        XCTAssertTrue(IndexService.target(for: ev("/", scan: true, dropped: true), root: root)! == (root, true))
+        XCTAssertTrue(IndexService.target(for: ev("/", scan: true), root: root)! == (root, true))
+        XCTAssertTrue(IndexService.target(for: ev("/Users/me", rootChanged: true), root: root)! == (root, true))
+        XCTAssertTrue(IndexService.target(for: ev("/System/Volumes/Data/Users/me/x/"), root: root)! == ("/Users/me/x", false))
+        XCTAssertTrue(IndexService.target(for: ev("/etc/", scan: true), root: "/")! == ("/etc", true))
+        XCTAssertNil(IndexService.target(for: ev(""), root: root))
+    }
+
     func testConcurrentRescansAreSerialized() {
         let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-rescan.bin"))
         service.start()
