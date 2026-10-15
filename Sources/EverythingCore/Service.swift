@@ -28,9 +28,24 @@ public final class IndexService {
     public let roots: [String]
     public let indexURL: URL
     public private(set) var scanner: Scanner
-    public private(set) var scanning = false
-    public private(set) var ready = false
-    public private(set) var lastScanSeconds: Double?
+    /// Guards the status fields below, which are read by request handlers on other threads.
+    private let stateLock = NSLock()
+    private var _scanning = false
+    private var _ready = false
+    private var _lastScanSeconds: Double?
+    private var _unwatchedRoots: [String] = []
+
+    private func locked<T>(_ body: () -> T) -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return body()
+    }
+
+    public var scanning: Bool { locked { _scanning } }
+    public var ready: Bool { locked { _ready } }
+    public var lastScanSeconds: Double? { locked { _lastScanSeconds } }
+    /// Roots whose FSEvents stream failed to start. Retried by `maintenance`, reported in status.
+    public var unwatchedRoots: [String] { locked { _unwatchedRoots } }
 
     private var watchers: [Watcher] = []
     private let work = DispatchQueue(label: "MacEverything.service")
@@ -103,7 +118,7 @@ public final class IndexService {
         lifecycle.lock()
         if let loaded = loadValidIndex() {
             index.replace(with: loaded)
-            ready = true
+            locked { _ready = true }
             log("loaded \(loaded.liveCount) entries from \(indexURL.path)")
             work.sync { appliedEventIds = loaded.volumeState.mapValues(\.lastEventId) }
             startWatchers(since: loaded.volumeState)
@@ -131,11 +146,13 @@ public final class IndexService {
         guard FileManager.default.fileExists(atPath: indexURL.path) else { return nil }
         do {
             let loaded = try FileIndex.load(from: indexURL)
-            let current = Watcher.currentEventId
             for root in roots {
+                // Ids from a per-host stream mean nothing to a per-device one and vice versa.
+                let perDevice = Watcher(root: root) { _ in }.isPerDevice
                 guard let state = loaded.volumeState[root],
                       state.volumeUUID == (Watcher.volumeUUID(for: root) ?? ""),
-                      state.lastEventId <= current,
+                      (state.perDevice ?? false) == perDevice,
+                      state.lastEventId <= Watcher.currentEventId(for: root),
                       loaded.lookup(root) != nil
                 else {
                     log("saved index is stale for \(root); rescanning")
@@ -164,8 +181,10 @@ public final class IndexService {
     }
 
     private func scanLocked() {
-        scanning = true
-        let since = Watcher.currentEventId
+        locked { _scanning = true }
+        // Each root's cursor is taken before any scanning, so the replay covers the whole scan.
+        var since: [String: UInt64] = [:]
+        for root in roots { since[root] = Watcher.currentEventId(for: root) }
         let started = Date()
         let fresh = FileIndex()
         for root in roots {
@@ -175,10 +194,12 @@ public final class IndexService {
             let stats = scanner.scanTree(into: fresh, root: id, rootPath: root)
             log("scanned \(root): \(stats.entries) entries, \(stats.unreadable) unreadable folders, "
                 + String(format: "%.1f s", stats.seconds))
-            fresh.volumeState[root] = .init(volumeUUID: Watcher.volumeUUID(for: root) ?? "", lastEventId: since)
+            fresh.volumeState[root] = .init(volumeUUID: Watcher.volumeUUID(for: root) ?? "",
+                                            lastEventId: since[root] ?? 0,
+                                            perDevice: Watcher(root: root) { _ in }.isPerDevice)
         }
         fresh.sortIfNeeded(force: true)
-        lastScanSeconds = Date().timeIntervalSince(started)
+        let elapsed = Date().timeIntervalSince(started)
         work.sync {
             // Queued changes refer to the old index; the replay from `since` covers them.
             pendingPaths = [:]
@@ -186,35 +207,35 @@ public final class IndexService {
             appliedEventIds = fresh.volumeState.mapValues(\.lastEventId)
             index.replace(with: fresh)
         }
-        scanning = false
-        ready = true
+        locked {
+            _lastScanSeconds = elapsed
+            _scanning = false
+            _ready = true
+        }
         dirty = true
         startWatchers(since: fresh.volumeState)
         work.async { try? self.saveOnWork() }
     }
 
-    /// Roots whose FSEvents stream failed to start. Retried by `maintenance`, reported in status.
-    public private(set) var unwatchedRoots: [String] = []
-
     /// Caller holds `lifecycle`.
     private func startWatchers(since states: [String: FileIndex.VolumeState]) {
         watchers.forEach { $0.stop() }
         watchers = []
-        unwatchedRoots = []
+        locked { _unwatchedRoots = [] }
         for root in roots { startWatcher(root, since: states[root]?.lastEventId) }
     }
 
     /// Caller holds `lifecycle`.
     private func startWatcher(_ root: String, since: UInt64?) {
-        let w = Watcher(paths: [root], since: since) { [weak self] events in
+        let w = Watcher(root: root) { [weak self] events in
             self?.receive(events, root: root)
         }
         if w.start(since: since) {
             watchers.append(w)
-            unwatchedRoots.removeAll { $0 == root }
+            locked { _unwatchedRoots.removeAll { $0 == root } }
         } else {
             log("could not watch \(root); changes there are missed until a retry succeeds")
-            if !unwatchedRoots.contains(root) { unwatchedRoots.append(root) }
+            locked { if !_unwatchedRoots.contains(root) { _unwatchedRoots.append(root) } }
         }
     }
 
@@ -349,7 +370,8 @@ public final class IndexService {
         let applied = appliedEventIds
         try index.write { idx in
             for (root, id) in applied {
-                idx.volumeState[root] = .init(volumeUUID: Watcher.volumeUUID(for: root) ?? "", lastEventId: id)
+                idx.volumeState[root] = .init(volumeUUID: Watcher.volumeUUID(for: root) ?? "", lastEventId: id,
+                                              perDevice: idx.volumeState[root]?.perDevice)
             }
             try idx.save(to: indexURL)
         }

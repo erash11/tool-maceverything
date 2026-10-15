@@ -143,6 +143,43 @@ final class MacTests: XCTestCase {
                        [dir + "/a", dir + "/empty"])
     }
 
+    /// Runs only when CI provides a mounted disk image (MEV_TEST_VOLUME), to exercise the
+    /// per-device FSEvents stream used for /Volumes roots.
+    func testExternalVolumeUsesPerDeviceStream() throws {
+        guard let volume = ProcessInfo.processInfo.environment["MEV_TEST_VOLUME"] else {
+            throw XCTSkip("set MEV_TEST_VOLUME to a mounted volume under /Volumes")
+        }
+        let root = volume + "/mev-" + UUID().uuidString.prefix(8)
+        try FileManager.default.createDirectory(atPath: root + "/sub", withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        XCTAssertTrue(Watcher(root: root) { _ in }.isPerDevice)
+
+        let indexURL = URL(fileURLWithPath: dir + "-vol.bin")
+        let service = IndexService(roots: [root], indexURL: indexURL)
+        service.start()
+        func waitFor(_ s: IndexService, _ q: String) -> Int {
+            let deadline = Date().addingTimeInterval(15)
+            var n = 0
+            while Date() < deadline {
+                s.sync()
+                n = s.index.read { $0.search(Query.parse(q)).total }
+                if n == 1 { break }
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+            return n
+        }
+        FileManager.default.createFile(atPath: root + "/sub/on-volume.txt", contents: nil)
+        XCTAssertEqual(waitFor(service, "on-volume"), 1)
+        service.stop()
+
+        FileManager.default.createFile(atPath: root + "/sub/while-stopped-vol.txt", contents: nil)
+        Thread.sleep(forTimeInterval: 1.5)
+        let again = IndexService(roots: [root], indexURL: indexURL)
+        again.start()
+        XCTAssertEqual(waitFor(again, "while-stopped-vol"), 1)
+        again.stop()
+    }
+
     func testConcurrentRescansAreSerialized() {
         let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-rescan.bin"))
         service.start()
@@ -169,6 +206,14 @@ final class MacTests: XCTestCase {
         XCTAssertGreaterThan(status.status?.entries ?? 0, 5)
 
         XCTAssertThrowsError(try IPC.send(IPCRequest(command: "status"), socketPath: "/tmp/none.sock"))
+
+        // An oversized request is refused without taking the daemon down.
+        let huge = String(repeating: "x", count: IPC.maxRequestBytes * 2)
+        // The server may hang up mid-write, so a send error is as acceptable as a refusal.
+        if let refused = try? IPC.send(IPCRequest(command: "search", query: huge), socketPath: socketPath) {
+            XCTAssertFalse(refused.ok)
+        }
+        XCTAssertTrue(try IPC.send(IPCRequest(command: "status"), socketPath: socketPath).ok)
     }
 }
 #endif
