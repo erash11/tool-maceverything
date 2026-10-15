@@ -12,8 +12,8 @@
 | First scan, getattrlistbulk | 17 to 22 s | under 60 s for 2M |
 | First scan, FileManager + lstat | 23 to 31 s | (comparison) |
 | Plain, wildcard, ext, size searches | 2 to 14 ms | under 50 ms |
-| `path:` search | 109 ms | under 50 ms (known gap) |
-| `regex:` search | about 370 ms | (NSRegularExpression per name; known gap) |
+| `path:` searches (`path:lib`, `path:contents/resources`) | 19 to 30 ms | under 50 ms |
+| `regex:` searches (`^[0-9]+$`, `\.plist$`, `^lib.*\.dylib$`) | 7 to 46 ms | under 100 ms (#5) |
 
 ## Reviews
 - Codex (GitHub), 5 passes on PR 1: 16 findings, all fixed. A 6th pass hit the Codex usage limit.
@@ -22,9 +22,9 @@
 - One CI run measured the first /Applications scan at 58 s (17 to 22 s in earlier runs). Likely
   runner noise from a cold disk cache; confirm on a real Mac.
 
-## Next
-- Run `./scripts/install.sh` on the Mac; record `ev --bench ~` and `ev --status` numbers
-  against the targets in the design doc.
-
-## Open questions
-- Is a custom tool worth it over Find Any File or HoudahSpot? Decide after a week of use.
+## Open work
+Tracked in GitHub issues: https://github.com/erash11/MacEverything/issues
+- Real-Mac testing: #2 (app, hotkey, install), #3 (first-scan time)
+- Performance: #6 (`searchfs()` scanner). #4 and #5 (`path:` and `regex:` speed) are done.
+- Release: #7 (Developer ID signing)
+- Review and decisions: #8 (independent review of post-Codex fixes), #9 (build vs buy), #10 (remove review PR)

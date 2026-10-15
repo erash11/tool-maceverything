@@ -130,9 +130,10 @@ func runBench(_ folder: String) {
     let t0 = Date()
     index.sortIfNeeded(force: true)
     print(String(format: "  sort by name: %.2f s", Date().timeIntervalSince(t0)))
-    for q in ["a", "report", "*.pdf", "ext:jpg;png", "path:lib", "size:>10mb", "regex:^[0-9]+$", "zzzzqqq"] {
+    for q in ["a", "report", "*.pdf", "ext:jpg;png", "path:lib", "path:contents/resources", "size:>10mb",
+              "regex:^[0-9]+$", "regex:\\.plist$", "regex:^lib.*\\.dylib$", "zzzzqqq"] {
         let r = index.search(Query.parse(q), options: SearchOptions(limit: 100))
-        print(String(format: "  search %-16@ %8ld matches  %7.2f ms", q as NSString, r.total, r.milliseconds))
+        print(String(format: "  search %-26@ %8ld matches  %7.2f ms", q as NSString, r.total, r.milliseconds))
     }
 }
 
