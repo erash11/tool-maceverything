@@ -25,7 +25,8 @@
 ## Open work
 Tracked in GitHub issues: https://github.com/erash11/MacEverything/issues
 - Real-Mac testing: #2 (app, hotkey, install), #3 (first-scan time)
-- Performance: #6 (`searchfs()` scanner: implemented and measured, not the default; see the
-  issue for numbers and the decision). #4 and #5 (`path:` and `regex:` speed) are done.
+- Performance: done. #4 and #5 (`path:` and `regex:` speed) met their targets. #6 (`searchfs()`)
+  was measured at about 10% faster and closed: the folder walk stays the default and
+  `ev --bench-searchfs` remains as a diagnostic.
 - Release: #7 (Developer ID signing)
 - Review and decisions: #8 (independent review of post-Codex fixes), #9 (build vs buy), #10 (remove review PR)
