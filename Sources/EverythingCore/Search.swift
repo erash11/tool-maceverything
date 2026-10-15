@@ -58,7 +58,9 @@ struct CompiledQuery {
     var slotStart: [Int] = []
     var slotLength: [Int] = []
     var regexes: [NSRegularExpression?] = []
-    var needsPath = false
+    /// Index into `terms` of each path: term; its PathTable is built per scan.
+    var pathTerms: [Int] = []
+    var hasRegex = false
 
     init(_ query: Query) {
         for group in query.groups {
@@ -91,12 +93,20 @@ struct CompiledQuery {
             t.kind = Kind.contains; t.negated = neg; t.start = addBytes(n); t.length = n.count
         case let .pathContains(n, neg):
             t.kind = Kind.path; t.negated = neg; t.start = addBytes(n); t.length = n.count
-            needsPath = true
+            t.b = Int64(pathTerms.count) // which PathTable
+            pathTerms.append(terms.count)
         case let .glob(n, neg):
             t.kind = Kind.glob; t.negated = neg; t.start = addBytes(n); t.length = n.count
         case let .regex(pattern, neg):
             t.kind = Kind.regex; t.negated = neg; t.start = regexes.count
             regexes.append(try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]))
+            hasRegex = true
+            // A literal every match must contain lets most names skip the regex engine.
+            if let literal = RegexSupport.requiredLiteral(pattern) {
+                let lit = Array(literal.utf8)
+                t.a = Int64(addBytes(lit))
+                t.b = Int64(lit.count)
+            }
         case let .ext(list, neg):
             t.kind = Kind.ext; t.negated = neg; t.start = slotStart.count; t.length = list.count
             for suffix in list {
@@ -242,23 +252,42 @@ extension FileIndex {
         compiled.groupStart.withUnsafeBufferPointer { groupStart in
         compiled.groupCount.withUnsafeBufferPointer { groupCount in
         partial.withUnsafeMutableBufferPointer { out in
+            // One table per path: term, built in a single pass before the parallel scan.
+            let tables = compiled.pathTerms.map { k in
+                PathTable(needle: qbytes, nStart: terms[k].start, n: terms[k].length, recs: recs, lower: lower)
+            }
             let ctx = MatchContext(recs: recs, lower: lower, terms: terms, qbytes: qbytes,
                                    slotStart: slotStart, slotLength: slotLength,
                                    groupStart: groupStart, groupCount: groupCount,
-                                   regexes: compiled.regexes)
+                                   regexes: compiled.regexes, pathTables: tables)
             DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
                 let lo = chunk * chunkSize
                 let hi = min(lo + chunkSize, count)
                 if lo >= hi { return }
                 var found: [Int32] = []
-                var paths = PathCache()
+                // For regex terms: the chunk's names as one string, so each name is matched by
+                // range instead of being copied into its own String. Records' lowercase names
+                // are stored back to back in id order, so the chunk is one byte range.
+                var text = RegexText()
+                if compiled.hasRegex {
+                    let byteLo = Int(recs[lo].lowerStart)
+                    let last = recs[hi - 1]
+                    let byteHi = Int(last.lowerStart) + Int(last.lowerLength)
+                    if byteHi >= byteLo, let base = lower.baseAddress,
+                       let ns = NSString(bytes: base + byteLo, length: byteHi - byteLo,
+                                         encoding: String.Encoding.utf8.rawValue) {
+                        text = RegexText(string: ns as String, byte: byteLo, unit: 0)
+                    }
+                }
                 for id in lo..<hi {
                     let r = recs[id]
+                    if compiled.hasRegex { text.advance(to: r, lower: lower) }
                     if r.flags & 2 != 0 { continue }
-                    if ctx.matches(r, paths: &paths) { found.append(Int32(id)) }
+                    if ctx.matches(r, text: text) { found.append(Int32(id)) }
                 }
                 out[chunk] = found
             }
+            withExtendedLifetime(tables) {}
         }}}}}}}}}
         return partial.flatMap { $0 }
     }
@@ -275,6 +304,7 @@ struct MatchContext {
     let groupStart: UnsafeBufferPointer<Int>
     let groupCount: UnsafeBufferPointer<Int>
     let regexes: [NSRegularExpression?]
+    let pathTables: [PathTable]
 
     @inline(__always)
     func compare(_ v: Int64, _ cmp: UInt8, _ target: Int64) -> Bool {
@@ -287,7 +317,7 @@ struct MatchContext {
         }
     }
 
-    func matches(_ r: Record, paths: inout PathCache) -> Bool {
+    func matches(_ r: Record, text: RegexText) -> Bool {
         let start = Int(r.lowerStart), len = Int(r.lowerLength)
         let groups = groupStart.count
         var g = 0
@@ -311,11 +341,18 @@ struct MatchContext {
                         break
                     }
                 case CompiledQuery.Kind.path:
-                    hit = pathContains(r, start, len, t, &paths)
+                    hit = pathTables[Int(t.b)].matches(r, start: start, len: len, needle: qbytes,
+                                                        nStart: t.start, lower: lower)
                 case CompiledQuery.Kind.regex:
-                    if let re = regexes[t.start] {
-                        let s = String(decoding: UnsafeBufferPointer(rebasing: lower[start..<start + len]), as: UTF8.self)
-                        hit = re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
+                    if t.b > 0 && !containsBytes(lower, start, len, qbytes, Int(t.a), Int(t.b)) {
+                        hit = false // lacks a literal every match needs
+                    } else if let re = regexes[t.start] {
+                        if let s = text.string {
+                            hit = re.rangeOfFirstMatch(in: s, options: [], range: text.range).location != NSNotFound
+                        } else {
+                            let s = String(decoding: UnsafeBufferPointer(rebasing: lower[start..<start + len]), as: UTF8.self)
+                            hit = re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
+                        }
                     } else {
                         hit = false
                     }
@@ -342,53 +379,6 @@ struct MatchContext {
             g += 1
         }
         return true
-    }
-
-    /// Does "parent path / name" contain the needle? Siblings are stored next to each other,
-    /// so the parent's answer and the tail of its path are reused across consecutive records.
-    func pathContains(_ r: Record, _ start: Int, _ len: Int, _ t: CompiledQuery.Term,
-                      _ paths: inout PathCache) -> Bool {
-        if r.parent != paths.lastParent || paths.lastTerm != t.start {
-            let full = parentPath(r.parent, cache: &paths.dirs)
-            paths.lastParent = r.parent
-            paths.lastTerm = t.start
-            paths.parentHit = full.withUnsafeBufferPointer { containsBytes($0, 0, $0.count, qbytes, t.start, t.length) }
-            // Only the last (needle length - 1) bytes can start a match that runs into the name.
-            var tail = Array(full.suffix(max(t.length - 1, 0)))
-            if !full.isEmpty && full.last != UInt8(ascii: "/") { tail.append(UInt8(ascii: "/")) }
-            paths.tail = tail
-        }
-        if paths.parentHit { return true }
-        if containsBytes(lower, start, len, qbytes, t.start, t.length) { return true }
-        // Matches that start in the parent's tail and run into the name.
-        let tail = paths.tail
-        let n = t.length
-        var i = 0
-        while i < tail.count {
-            var j = 0
-            while j < n {
-                let pos = i + j
-                let b = pos < tail.count ? tail[pos] : (pos - tail.count < len ? lower[start + pos - tail.count] : 0)
-                if pos - tail.count >= len || b != qbytes[t.start + j] { break }
-                j += 1
-            }
-            if j == n { return true }
-            i += 1
-        }
-        return false
-    }
-
-    /// Lowercase full path of a directory, cached per chunk because siblings share it.
-    func parentPath(_ id: Int32, cache: inout [Int32: [UInt8]]) -> [UInt8] {
-        if id < 0 { return [] }
-        if let hit = cache[id] { return hit }
-        let r = recs[Int(id)]
-        var out = parentPath(r.parent, cache: &cache)
-        if !out.isEmpty && out.last != UInt8(ascii: "/") { out.append(UInt8(ascii: "/")) }
-        let s = Int(r.lowerStart)
-        out.append(contentsOf: lower[s..<s + Int(r.lowerLength)])
-        cache[id] = out
-        return out
     }
 }
 
@@ -447,11 +437,33 @@ func suffixBytes(_ hay: UnsafeBufferPointer<UInt8>, _ start: Int, _ len: Int,
     return true
 }
 
-/// Per-chunk scratch state for path terms.
-struct PathCache {
-    var dirs: [Int32: [UInt8]] = [:]
-    var lastParent: Int32 = -2
-    var lastTerm = -1
-    var parentHit = false
-    var tail: [UInt8] = []
+/// One search chunk's lowercase names as a single string, with the UTF-16 range of the
+/// record being matched. `advance` walks the UTF-8 bytes in id order to keep the range current.
+struct RegexText {
+    var string: String?
+    var byte = 0      // UTF-8 offset in lowerNames that `unit` corresponds to
+    var unit = 0      // UTF-16 offset in `string`
+    var range = NSRange(location: 0, length: 0)
+
+    init() {}
+
+    init(string: String, byte: Int, unit: Int) {
+        self.string = string
+        self.byte = byte
+        self.unit = unit
+    }
+
+    @inline(__always)
+    mutating func advance(to r: Record, lower: UnsafeBufferPointer<UInt8>) {
+        guard string != nil else { return }
+        let start = Int(r.lowerStart), end = start + Int(r.lowerLength)
+        if start < byte {
+            string = nil // names not stored in id order: fall back to per-name matching
+            return
+        }
+        while byte < start { unit += RegexSupport.utf16Units(lower[byte]); byte += 1 }
+        let first = unit
+        while byte < end { unit += RegexSupport.utf16Units(lower[byte]); byte += 1 }
+        range = NSRange(location: first, length: unit - first)
+    }
 }

@@ -166,4 +166,61 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(index.childIds(of: root).count, 1)
         XCTAssertNotNil(index.lookup("/big/f7"))
     }
+
+    /// A tree with nested folders, accents and a root named "/", for brute-force comparisons.
+    func makeDeepIndex() -> FileIndex {
+        let index = FileIndex()
+        let root = index.addRoot("/")
+        var dirs: [Int32] = [root]
+        let names = ["Users", "me", "Library", "Caches", "film", "Game Film", "thrée", "ünï", "lib", "x"]
+        for (i, name) in names.enumerated() {
+            let parent = dirs[i / 2]
+            dirs.append(index.add(ScannedEntry(name: name, isDirectory: true, size: 0, modified: 0), parent: parent))
+        }
+        for (i, dir) in dirs.enumerated() {
+            for file in ["a\(i).txt", "lib\(i).dylib", "Info.plist", "IMG_\(1000 + i).jpg", "thrée\(i).md", "\(i)"] {
+                index.add(ScannedEntry(name: file, isDirectory: false, size: 0, modified: 0), parent: dir)
+            }
+        }
+        index.sortIfNeeded(force: true)
+        return index
+    }
+
+    func testPathTermsMatchBruteForce() {
+        let index = makeDeepIndex()
+        let all = (0..<Int32(index.records.count)).filter { !index.records[Int($0)].isDeleted }
+        for needle in ["lib", "users/me", "me/library/c", "film/game", "/a", "e/", "/", "thrée/thr", "ünï/", "x/a1", "nothing-here"] {
+            let n = FileIndex.searchForm(needle)
+            let expected = Set(all.filter { FileIndex.searchForm(index.path(of: $0)).contains(n) })
+            let got = Set(index.matchingIds(Query(groups: [[.pathContains(Array(n.utf8), negated: false)]])))
+            XCTAssertEqual(got, expected, "path:\(needle)")
+        }
+    }
+
+    func testRegexMatchesBruteForceAcrossAccents() throws {
+        let index = makeDeepIndex()
+        let all = (0..<Int32(index.records.count)).filter { !index.records[Int($0)].isDeleted }
+        for pattern in ["^[0-9]+$", "\\.plist$", "^lib.*\\.dylib$", "^img_\\d+", "ée\\d", "^thrée\\d+\\.md$", "^a1", "(jpg|md)$", "zzz"] {
+            let re = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+            let expected = Set(all.filter { id in
+                let s = FileIndex.searchForm(index.name(of: id))
+                return re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
+            })
+            let got = Set(index.matchingIds(Query.parse("regex:" + pattern)))
+            XCTAssertEqual(got, expected, "regex:\(pattern)")
+            XCTAssertFalse(pattern != "zzz" && got.isEmpty, "regex:\(pattern) should match something")
+        }
+    }
+
+    func testRequiredLiteral() {
+        XCTAssertEqual(RegexSupport.requiredLiteral("^IMG_\\d+"), "img_")
+        XCTAssertEqual(RegexSupport.requiredLiteral("\\.plist$"), ".plist")
+        XCTAssertEqual(RegexSupport.requiredLiteral("^lib.*\\.dylib$"), ".dylib")
+        XCTAssertEqual(RegexSupport.requiredLiteral("colou?r"), "colo")
+        XCTAssertEqual(RegexSupport.requiredLiteral("ab{0,2}cd"), "cd")
+        XCTAssertNil(RegexSupport.requiredLiteral("^[0-9]+$"))
+        XCTAssertNil(RegexSupport.requiredLiteral("(jpg|png)$"))
+        XCTAssertNil(RegexSupport.requiredLiteral("a|b"))
+        XCTAssertEqual(RegexSupport.requiredLiteral("x(abc)?yz"), "yz")
+    }
 }
