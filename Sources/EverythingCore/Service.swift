@@ -246,23 +246,29 @@ public final class IndexService {
             if let maxId = events.map(\.id).max(), maxId > (self.pendingEventIds[root] ?? 0) {
                 self.pendingEventIds[root] = maxId
             }
-            if events.contains(where: \.rootChanged) {
-                // The root itself (or an ancestor) was renamed, deleted or recreated:
-                // re-list the whole hierarchy. A missing root is emptied by refresh.
-                self.pendingPaths[root] = true
-            }
-            for e in events where !e.path.isEmpty && !e.rootChanged {
-                var p = e.path
-                if p.hasPrefix("/System/Volumes/Data/") { p = String(p.dropFirst("/System/Volumes/Data".count)) }
-                if p.count > 1 && p.hasSuffix("/") { p.removeLast() }
-                if self.isExcluded(p) { continue }
-                self.pendingPaths[p] = (self.pendingPaths[p] ?? false) || e.mustScanSubDirs
+            for e in events {
+                guard let (p, recursive) = IndexService.target(for: e, root: root) else { continue }
+                if p != root && self.isExcluded(p) { continue }
+                self.pendingPaths[p] = (self.pendingPaths[p] ?? false) || recursive
             }
             if !self.flushScheduled && (!self.pendingPaths.isEmpty || !self.pendingEventIds.isEmpty) {
                 self.flushScheduled = true
                 self.work.asyncAfter(deadline: .now() + 0.2) { self.flush() }
             }
         }
+    }
+
+    /// What to refresh for one event on `root`'s stream: a path and whether to recurse.
+    /// Root changes, dropped events, and paths outside the root (FSEvents may report "/" when
+    /// it drops events) all mean the whole root is rescanned, so no change is skipped.
+    static func target(for e: Watcher.Event, root: String) -> (String, Bool)? {
+        if e.rootChanged || e.dropped { return (root, true) }
+        if e.path.isEmpty { return nil }
+        var p = e.path
+        if p.hasPrefix("/System/Volumes/Data/") { p = String(p.dropFirst("/System/Volumes/Data".count)) }
+        if p.count > 1 && p.hasSuffix("/") { p.removeLast() }
+        let inside = root == "/" || p == root || p.hasPrefix(root + "/")
+        return inside ? (p, e.mustScanSubDirs) : (root, true)
     }
 
     /// The configured root that contains `path` (longest match).
