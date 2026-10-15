@@ -39,6 +39,9 @@ public final class IndexService {
     private var pendingEventIds: [String: UInt64] = [:]
     /// Highest event id per root whose change is in the index. Only this is ever saved.
     private var appliedEventIds: [String: UInt64] = [:]
+    /// Paths whose refresh failed, with the number of attempts so far.
+    private var retries: [String: Int] = [:]
+    static let maxRetries = 3
     /// Held while loading or scanning, so only one runs and `watchers` has one writer.
     private let lifecycle = NSLock()
     private var flushScheduled = false
@@ -192,7 +195,12 @@ public final class IndexService {
             if let maxId = events.map(\.id).max(), maxId > (self.pendingEventIds[root] ?? 0) {
                 self.pendingEventIds[root] = maxId
             }
-            for e in events where !e.path.isEmpty {
+            if events.contains(where: \.rootChanged) {
+                // The root itself (or an ancestor) was renamed, deleted or recreated:
+                // re-list the whole hierarchy. A missing root is emptied by refresh.
+                self.pendingPaths[root] = true
+            }
+            for e in events where !e.path.isEmpty && !e.rootChanged {
                 var p = e.path
                 if p.hasPrefix("/System/Volumes/Data/") { p = String(p.dropFirst("/System/Volumes/Data".count)) }
                 if p.count > 1 && p.hasSuffix("/") { p.removeLast() }
@@ -204,6 +212,11 @@ public final class IndexService {
                 self.work.asyncAfter(deadline: .now() + 0.2) { self.flush() }
             }
         }
+    }
+
+    /// The configured root that contains `path` (longest match).
+    func rootFor(_ path: String) -> String {
+        roots.filter { $0 == "/" || path == $0 || path.hasPrefix($0 + "/") }.max { $0.count < $1.count } ?? "/"
     }
 
     func isExcluded(_ path: String) -> Bool {
@@ -222,8 +235,20 @@ public final class IndexService {
         let ids = pendingEventIds
         pendingPaths = [:]
         pendingEventIds = [:]
+        var failedRoots = Set<String>()
         defer {
-            for (root, id) in ids where id > (appliedEventIds[root] ?? 0) { appliedEventIds[root] = id }
+            for (root, id) in ids {
+                if failedRoots.contains(root) {
+                    // Keep the cursor behind the unapplied change; retry later.
+                    pendingEventIds[root] = max(pendingEventIds[root] ?? 0, id)
+                } else if id > (appliedEventIds[root] ?? 0) {
+                    appliedEventIds[root] = id
+                }
+            }
+            if !pendingPaths.isEmpty && !flushScheduled {
+                flushScheduled = true
+                work.asyncAfter(deadline: .now() + 5) { self.flush() }
+            }
         }
         if batch.isEmpty { return }
         // Parents first, so a rescan of a parent covers its children.
@@ -242,7 +267,21 @@ public final class IndexService {
                     id = idx.lookup(target)
                 }
                 guard let dir = id, idx.records[Int(dir)].isDirectory else { continue }
-                scanner.refresh(idx, dir: dir, path: target, recursive: recursive)
+                if scanner.refresh(idx, dir: dir, path: target, recursive: recursive) {
+                    retries[path] = nil
+                    continue
+                }
+                let attempts = (retries[path] ?? 0) + 1
+                if attempts > IndexService.maxRetries {
+                    // Persistently unreadable (for example no permission): stop holding the
+                    // cursor back, or one folder would stall every later save.
+                    log("giving up on \(path) after \(IndexService.maxRetries) failed refreshes")
+                    retries[path] = nil
+                    continue
+                }
+                retries[path] = attempts
+                pendingPaths[path] = (pendingPaths[path] ?? false) || (batch[path] ?? false)
+                failedRoots.insert(rootFor(path))
             }
             if idx.unsorted.count > 50_000 { idx.sortIfNeeded() }
         }

@@ -106,6 +106,34 @@ final class MacTests: XCTestCase {
         again.stop()
     }
 
+    func testUnreadableFolderIsReportedAndKept() throws {
+        let index = FileIndex()
+        let root = index.addRoot(dir)
+        Scanner().scanTree(into: index, root: root, rootPath: dir)
+        let b = index.lookup(dir + "/a/b")!
+        chmod(dir + "/a/b", 0)
+        defer { chmod(dir + "/a/b", 0o755) }
+        XCTAssertFalse(Scanner().refresh(index, dir: b, path: dir + "/a/b", recursive: false))
+        XCTAssertNotNil(index.lookup(dir + "/a/b/two.PDF"), "an unreadable folder must not lose its entries")
+    }
+
+    func testDeletedRootIsEmptied() throws {
+        let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-root.bin"))
+        service.start()
+        XCTAssertEqual(service.index.read { $0.search(Query.parse("two.pdf")).total }, 1)
+        try FileManager.default.removeItem(atPath: dir)
+        let deadline = Date().addingTimeInterval(15)
+        var left = 1
+        while Date() < deadline {
+            service.sync()
+            left = service.index.read { $0.search(Query.parse("two.pdf")).total }
+            if left == 0 { break }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        XCTAssertEqual(left, 0)
+        service.stop()
+    }
+
     func testConcurrentRescansAreSerialized() {
         let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-rescan.bin"))
         service.start()
