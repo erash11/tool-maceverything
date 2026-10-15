@@ -6,6 +6,7 @@ usage: ev [options] <query>
        ev --status | --rescan | --save
        ev --index [root ...]     scan without the daemon and write the index file
        ev --bench [folder]       time the scanners and searches on one folder
+       ev --bench-searchfs VOL   compare searchfs() with the folder walk on a whole volume
 
 query syntax:
   foo bar           names containing both words      "exact phrase"
@@ -76,7 +77,7 @@ while i < args.count {
     case "--long", "-l": long = true
     case "--json": json = true
     case "--direct": direct = true
-    case "--status", "--rescan", "--save", "--index", "--bench", "--sync": command = a
+    case "--status", "--rescan", "--save", "--index", "--bench", "--bench-searchfs", "--sync": command = a
     case "--": queryParts.append(contentsOf: args[(i + 1)...]); i = args.count
     default: queryParts.append(a)
     }
@@ -137,6 +138,38 @@ func runBench(_ folder: String) {
     }
 }
 
+/// Times searchfs() against the getattrlistbulk walk on one volume and compares the paths.
+func runSearchFSBench(_ volume: String) {
+    print("searchfs benchmark on \(volume)")
+    let found = SearchFS.listVolume(volume)
+    if let error = found.error {
+        print("  searchfs: \(error)")
+        return
+    }
+    let viaSearch = FileIndex()
+    let searchRoot = viaSearch.addRoot(volume)
+    let t0 = Date()
+    let tree = SearchFS.buildTree(found.entries, volumePath: volume, into: viaSearch, root: searchRoot)
+    let buildSeconds = Date().timeIntervalSince(t0)
+    print(String(format: "  searchfs: %ld entries in %ld calls, %.2f s; tree %.2f s (%ld placed, %ld unreachable)",
+                 found.entries.count, found.calls, found.seconds, buildSeconds, tree.added, tree.unreachable))
+
+    let viaWalk = FileIndex()
+    let walkRoot = viaWalk.addRoot(volume)
+    let stats = Scanner(exclusions: []).scanTree(into: viaWalk, root: walkRoot, rootPath: volume)
+    print(String(format: "  getattrlistbulk walk: %ld entries, %ld unreadable folders, %.2f s",
+                 stats.entries, stats.unreadable, stats.seconds))
+
+    func paths(_ index: FileIndex) -> Set<String> {
+        Set((0..<Int32(index.records.count)).filter { !index.records[Int($0)].isDeleted }.map { index.path(of: $0) })
+    }
+    let a = paths(viaSearch), b = paths(viaWalk)
+    let onlySearch = a.subtracting(b), onlyWalk = b.subtracting(a)
+    print("  only in searchfs: \(onlySearch.count), only in walk: \(onlyWalk.count)")
+    for p in onlySearch.sorted().prefix(5) { print("    searchfs only: \(p)") }
+    for p in onlyWalk.sorted().prefix(5) { print("    walk only: \(p)") }
+}
+
 switch command {
 case "--status":
     do {
@@ -161,6 +194,8 @@ case "--index":
     let service = IndexService(roots: roots) { print($0) }
     service.fullScan()
     service.stop()
+case "--bench-searchfs":
+    runSearchFSBench(IndexService.canonical(queryParts.first ?? "/System/Volumes/Data"))
 case "--bench":
     runBench(IndexService.canonical(queryParts.first ?? NSHomeDirectory()))
 default:

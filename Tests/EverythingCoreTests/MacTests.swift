@@ -226,6 +226,42 @@ final class MacTests: XCTestCase {
         XCTAssertNil(IndexService.target(for: ev(""), root: root))
     }
 
+    /// searchfs() must produce exactly the paths, kinds, sizes and dates of the folder walk.
+    func testSearchFSMatchesWalkOnVolume() throws {
+        guard let volume = ProcessInfo.processInfo.environment["MEV_TEST_VOLUME"] else {
+            throw XCTSkip("set MEV_TEST_VOLUME to a mounted volume under /Volumes")
+        }
+        let base = volume + "/sfs-" + UUID().uuidString.prefix(8)
+        let fm = FileManager.default
+        try fm.createDirectory(atPath: base + "/a/b/c", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: base + "/empty", withIntermediateDirectories: true)
+        try Data(repeating: 7, count: 4321).write(to: URL(fileURLWithPath: base + "/a/size.bin"))
+        try Data().write(to: URL(fileURLWithPath: base + "/a/b/thrée ünïcode.md"))
+        for i in 0..<3000 { fm.createFile(atPath: base + "/a/b/c/f\(i).txt", contents: nil) }
+        try fm.createSymbolicLink(atPath: base + "/link", withDestinationPath: base + "/a")
+        defer { try? fm.removeItem(atPath: base) }
+
+        let found = SearchFS.listVolume(volume)
+        if let error = found.error { throw XCTSkip("searchfs unavailable on this volume: \(error)") }
+        let viaSearch = FileIndex()
+        SearchFS.buildTree(found.entries, volumePath: volume, into: viaSearch, root: viaSearch.addRoot(volume))
+        let viaWalk = FileIndex()
+        Scanner(exclusions: []).scanTree(into: viaWalk, root: viaWalk.addRoot(volume), rootPath: volume)
+
+        func describe(_ index: FileIndex) -> Set<String> {
+            Set((0..<Int32(index.records.count)).compactMap { id -> String? in
+                let r = index.records[Int(id)]
+                let p = index.path(of: id)
+                guard p.hasPrefix(base) else { return nil }
+                return "\(p)|\(r.isDirectory)|\(r.size)|\(r.modified)"
+            })
+        }
+        let a = describe(viaSearch), b = describe(viaWalk)
+        XCTAssertEqual(a.count, 3008, "entries under the test folder via searchfs")
+        XCTAssertEqual(a.subtracting(b), [], "only in searchfs")
+        XCTAssertEqual(b.subtracting(a), [], "only in walk")
+    }
+
     func testConcurrentRescansAreSerialized() {
         let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-rescan.bin"))
         service.start()

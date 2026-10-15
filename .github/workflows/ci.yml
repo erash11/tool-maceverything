@@ -26,5 +26,11 @@ jobs:
         run: |
           .build/release/ev --bench /usr
           .build/release/ev --bench /Applications
+      - name: searchfs benchmark (issue 6)
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          .build/release/ev --bench-searchfs /Volumes/MEVTest
+          .build/release/ev --bench-searchfs /System/Volumes/Data
       - name: Bundle the app
         run: ./scripts/make-app.sh && ls -la build
