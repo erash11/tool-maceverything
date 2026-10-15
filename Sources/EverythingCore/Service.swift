@@ -116,7 +116,7 @@ public final class IndexService {
     /// searchable; watching starts in the background.
     public func start() {
         lifecycle.lock()
-        if let loaded = loadValidIndex() {
+        if let loaded = loadIndex() {
             index.replace(with: loaded)
             locked { _ready = true }
             log("loaded \(loaded.liveCount) entries from \(indexURL.path)")
@@ -124,6 +124,9 @@ public final class IndexService {
             startWatchers(since: loaded.volumeState)
         } else {
             scanLocked()
+        }
+        work.sync {
+            for root in roots where !FileManager.default.fileExists(atPath: root) { offlineRoots.insert(root) }
         }
         lifecycle.unlock()
         let t = DispatchSource.makeTimerSource(queue: work)
@@ -142,31 +145,55 @@ public final class IndexService {
         try? save()
     }
 
-    private func loadValidIndex() -> FileIndex? {
+    /// Loads the saved index and checks each root on its own: valid roots are kept, roots no
+    /// longer configured are dropped, and only stale or new roots are scanned. A drive that is
+    /// plugged in or out therefore does not force a rescan of the boot volume.
+    private func loadIndex() -> FileIndex? {
         guard FileManager.default.fileExists(atPath: indexURL.path) else { return nil }
-        do {
-            let loaded = try FileIndex.load(from: indexURL)
-            for root in roots {
-                // Ids from a per-host stream mean nothing to a per-device one and vice versa.
-                let perDevice = Watcher(root: root) { _ in }.isPerDevice
-                guard let state = loaded.volumeState[root],
-                      state.volumeUUID == (Watcher.volumeUUID(for: root) ?? ""),
-                      (state.perDevice ?? false) == perDevice,
-                      state.lastEventId <= Watcher.currentEventId(for: root),
-                      loaded.lookup(root) != nil
-                else {
-                    log("saved index is stale for \(root); rescanning")
-                    return nil
-                }
-            }
-            if Set(loaded.roots.map { loaded.name(of: $0) }) != Set(roots) {
-                log("roots changed; rescanning")
-                return nil
-            }
-            return loaded
-        } catch {
+        let loaded: FileIndex
+        do { loaded = try FileIndex.load(from: indexURL) } catch {
             log("could not load index: \(error)")
             return nil
+        }
+        for id in loaded.roots where !roots.contains(loaded.name(of: id)) {
+            loaded.volumeState[loaded.name(of: id)] = nil
+            loaded.remove(id)
+        }
+        var stale: [String] = []
+        for root in roots {
+            // Ids from a per-host stream mean nothing to a per-device one and vice versa.
+            let perDevice = Watcher(root: root) { _ in }.isPerDevice
+            let valid = loaded.volumeState[root].map {
+                $0.volumeUUID == (Watcher.volumeUUID(for: root) ?? "")
+                    && ($0.perDevice ?? false) == perDevice
+                    && $0.lastEventId <= Watcher.currentEventId(for: root)
+            } ?? false
+            if valid, loaded.lookup(root) != nil { continue }
+            if let id = loaded.lookup(root), loaded.records[Int(id)].parent < 0 { loaded.remove(id) }
+            stale.append(root)
+        }
+        if !stale.isEmpty {
+            log("scanning \(stale.joined(separator: ", ")); keeping the rest of the saved index")
+            scanRoots(stale, into: loaded)
+        }
+        loaded.sortIfNeeded()
+        return loaded
+    }
+
+    /// Scans `list` into `target`, recording each root's cursor before any scanning starts.
+    private func scanRoots(_ list: [String], into target: FileIndex) {
+        var since: [String: UInt64] = [:]
+        for root in list { since[root] = Watcher.currentEventId(for: root) }
+        for root in list {
+            let mtime = (try? FileManager.default.attributesOfItem(atPath: root)[.modificationDate] as? Date)
+                .map { Int64($0.timeIntervalSince1970) } ?? 0
+            let id = target.addRoot(root, modified: mtime)
+            let stats = scanner.scanTree(into: target, root: id, rootPath: root)
+            log("scanned \(root): \(stats.entries) entries, \(stats.unreadable) unreadable folders, "
+                + String(format: "%.1f s", stats.seconds))
+            target.volumeState[root] = .init(volumeUUID: Watcher.volumeUUID(for: root) ?? "",
+                                             lastEventId: since[root] ?? 0,
+                                             perDevice: Watcher(root: root) { _ in }.isPerDevice)
         }
     }
 
@@ -182,22 +209,9 @@ public final class IndexService {
 
     private func scanLocked() {
         locked { _scanning = true }
-        // Each root's cursor is taken before any scanning, so the replay covers the whole scan.
-        var since: [String: UInt64] = [:]
-        for root in roots { since[root] = Watcher.currentEventId(for: root) }
         let started = Date()
         let fresh = FileIndex()
-        for root in roots {
-            let mtime = (try? FileManager.default.attributesOfItem(atPath: root)[.modificationDate] as? Date)
-                .map { Int64($0.timeIntervalSince1970) } ?? 0
-            let id = fresh.addRoot(root, modified: mtime)
-            let stats = scanner.scanTree(into: fresh, root: id, rootPath: root)
-            log("scanned \(root): \(stats.entries) entries, \(stats.unreadable) unreadable folders, "
-                + String(format: "%.1f s", stats.seconds))
-            fresh.volumeState[root] = .init(volumeUUID: Watcher.volumeUUID(for: root) ?? "",
-                                            lastEventId: since[root] ?? 0,
-                                            perDevice: Watcher(root: root) { _ in }.isPerDevice)
-        }
+        scanRoots(roots, into: fresh)
         fresh.sortIfNeeded(force: true)
         let elapsed = Date().timeIntervalSince(started)
         work.sync {
@@ -227,6 +241,8 @@ public final class IndexService {
 
     /// Caller holds `lifecycle`.
     private func startWatcher(_ root: String, since: UInt64?) {
+        watchers.filter { $0.root == root }.forEach { $0.stop() }
+        watchers.removeAll { $0.root == root }
         let w = Watcher(root: root) { [weak self] events in
             self?.receive(events, root: root)
         }
@@ -310,8 +326,10 @@ public final class IndexService {
         if batch.isEmpty { return }
         // Parents first, so a rescan of a parent covers its children.
         let ordered = batch.keys.sorted { $0.count < $1.count }
-        index.write { idx in
-            for path in ordered {
+        for path in ordered {
+            // Resolve under the shared lock; refresh lists folders without holding any lock.
+            // Ids stay valid because every index write happens on this queue.
+            let resolved: (String, Int32, Bool)? = index.read { idx in
                 var target = path
                 var recursive = batch[path] ?? false
                 var id = idx.lookup(target)
@@ -323,25 +341,30 @@ public final class IndexService {
                     recursive = false
                     id = idx.lookup(target)
                 }
-                guard let dir = id, idx.records[Int(dir)].isDirectory else { continue }
-                if scanner.refresh(idx, dir: dir, path: target, recursive: recursive) {
-                    retries[path] = nil
-                    continue
-                }
-                let attempts = (retries[path] ?? 0) + 1
-                if attempts > IndexService.maxRetries {
-                    // Persistently unreadable (for example no permission): stop holding the
-                    // cursor back, or one folder would stall every later save.
-                    log("giving up on \(path) after \(IndexService.maxRetries) failed refreshes")
-                    retries[path] = nil
-                    continue
-                }
-                retries[path] = attempts
-                pendingPaths[path] = (pendingPaths[path] ?? false) || (batch[path] ?? false)
-                failedRoots.insert(rootFor(path))
+                guard let dir = id, idx.records[Int(dir)].isDirectory else { return nil }
+                return (target, dir, recursive)
             }
-            if idx.unsorted.count > 50_000 { idx.sortIfNeeded() }
+            guard let (target, dir, recursive) = resolved else { continue }
+            if scanner.refresh(index, dir: dir, path: target, recursive: recursive) {
+                retries[path] = nil
+                if roots.contains(target) && !FileManager.default.fileExists(atPath: target) {
+                    offlineRoots.insert(target) // a drive was unplugged; rescanned when it returns
+                }
+                continue
+            }
+            let attempts = (retries[path] ?? 0) + 1
+            if attempts > IndexService.maxRetries {
+                // Persistently unreadable (for example no permission): stop holding the
+                // cursor back, or one folder would stall every later save.
+                log("giving up on \(path) after \(IndexService.maxRetries) failed refreshes")
+                retries[path] = nil
+                continue
+            }
+            retries[path] = attempts
+            pendingPaths[path] = (pendingPaths[path] ?? false) || (batch[path] ?? false)
+            failedRoots.insert(rootFor(path))
         }
+        if index.read({ $0.unsorted.count }) > 50_000 { sortOffLock() }
         dirty = true
     }
 
@@ -351,19 +374,44 @@ public final class IndexService {
             for root in unwatchedRoots { startWatcher(root, since: appliedEventIds[root]) }
             lifecycle.unlock()
         }
-        index.write { idx in
-            if idx.records.count > 0 && Double(idx.deletedCount) / Double(idx.records.count) > 0.2 {
-                // Compaction renumbers records; safe because ids never leave a single request.
-                let c = idx.compacted()
-                idx.adopt(c)
-            } else if !idx.unsorted.isEmpty {
-                idx.sortIfNeeded()
+        // A drive that was unplugged and is back: watch it again and re-list it.
+        let returned = offlineRoots.filter { FileManager.default.fileExists(atPath: $0) }
+        if !returned.isEmpty, lifecycle.try() {
+            for root in returned {
+                let since = Watcher.currentEventId(for: root)
+                startWatcher(root, since: since)
+                appliedEventIds[root] = since
+                pendingPaths[root] = true
+                offlineRoots.remove(root)
+                log("\(root) is back; rescanning it")
             }
+            lifecycle.unlock()
+            flush()
+        }
+        // Heavy work runs under the shared lock; the write lock is held only to swap results in.
+        // Nothing else writes the index meanwhile, since all writes happen on this queue.
+        let compacted: FileIndex? = index.read { idx in
+            idx.records.count > 0 && Double(idx.deletedCount) / Double(idx.records.count) > 0.2
+                ? idx.compacted() : nil
+        }
+        if let c = compacted {
+            // Compaction renumbers records; safe because ids never leave a single request.
+            index.write { $0.adopt(c) }
+        } else {
+            sortOffLock()
         }
         saveCounter += 1
         if dirty && saveCounter % 10 == 0 { try? saveOnWork() }
     }
     private var saveCounter = 0
+    /// Roots whose path disappeared (an unplugged drive). Lives on `work`.
+    private var offlineRoots = Set<String>()
+
+    /// Sorts under the shared lock and installs the order under the write lock. Runs on `work`.
+    private func sortOffLock() {
+        guard let order = index.read({ $0.needsSort ? $0.computedOrder() : nil }) else { return }
+        index.write { $0.install(order: order) }
+    }
 
     /// Applies queued changes, then saves. Safe from any thread except `work`.
     public func save() throws {
@@ -374,13 +422,15 @@ public final class IndexService {
     private func saveOnWork() throws {
         flush()
         let applied = appliedEventIds
-        try index.write { idx in
+        sortOffLock()
+        index.write { idx in
             for (root, id) in applied {
                 idx.volumeState[root] = .init(volumeUUID: Watcher.volumeUUID(for: root) ?? "", lastEventId: id,
                                               perDevice: idx.volumeState[root]?.perDevice)
             }
-            try idx.save(to: indexURL)
         }
+        // Serializing (and compacting, if needed) only reads, so searches continue meanwhile.
+        try index.read { try $0.save(to: indexURL) }
         dirty = false
         log("saved index to \(indexURL.path)")
     }
@@ -390,9 +440,16 @@ public final class IndexService {
     /// Waits until queued changes are applied. For tests and the `sync` command.
     public func sync() { work.sync { flush() } }
 
+    /// Runs the once-a-minute maintenance pass now. For tests.
+    func maintenanceNow() { work.sync { maintenance() } }
+
     public func handle(_ request: IPCRequest) -> IPCResponse {
         switch request.command {
         case "search":
+            guard ready else {
+                return IPCResponse(ok: false, error: "the index is still being built; try again shortly",
+                                   status: status())
+            }
             let query = Query.parse(request.query ?? "")
             let options = SearchOptions(limit: request.limit ?? 100, offset: request.offset ?? 0,
                                         sort: request.sort ?? .name, descending: request.descending ?? false)

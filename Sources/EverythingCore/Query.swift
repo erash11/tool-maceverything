@@ -12,8 +12,8 @@ public struct Query {
         case glob([UInt8], negated: Bool)              // lowercase wildcard pattern, whole name
         case regex(String, negated: Bool)
         case ext([[UInt8]], negated: Bool)             // ".pdf" style lowercase suffixes
-        case size(Comparison, Int64)
-        case modified(Comparison, Int64, Int64)        // [start, end) seconds since 1970
+        case size(Comparison, Int64, negated: Bool)
+        case modified(Comparison, Int64, Int64, negated: Bool) // [start, end) seconds since 1970
         case filesOnly
         case foldersOnly
     }
@@ -56,7 +56,8 @@ public struct Query {
                 if !current.isEmpty { tokens.append(current); current = "" }
                 continue
             }
-            if !inQuotes && ch == "|" {
+            // "|" separates alternatives, except inside a regex: term, where it is alternation.
+            if !inQuotes && ch == "|" && !current.lowercased().hasPrefix("regex:") {
                 if !current.isEmpty { tokens.append(current); current = "" }
                 tokens.append("|")
                 continue
@@ -76,8 +77,9 @@ public struct Query {
         }
         let lower = FileIndex.searchForm(token)
 
-        if lower == "file:" { return .filesOnly }
-        if lower == "folder:" { return .foldersOnly }
+        // "!file:" means folders and "!folder:" means files.
+        if lower == "file:" { return negated ? .foldersOnly : .filesOnly }
+        if lower == "folder:" { return negated ? .filesOnly : .foldersOnly }
         if lower.hasPrefix("ext:") {
             let exts = lower.dropFirst(4).split(separator: ";").map { Array(("." + $0).utf8) }
             return exts.isEmpty ? nil : .ext(exts, negated: negated)
@@ -93,12 +95,12 @@ public struct Query {
         if lower.hasPrefix("size:") {
             let (cmp, rest) = comparison(String(lower.dropFirst(5)))
             guard let bytes = parseSize(rest) else { return nil }
-            return .size(cmp, bytes)
+            return .size(cmp, bytes, negated: negated)
         }
         if lower.hasPrefix("dm:") {
             let (cmp, rest) = comparison(String(lower.dropFirst(3)))
             guard let (start, end) = parseDay(rest, now: now, calendar: calendar) else { return nil }
-            return .modified(cmp, start, end)
+            return .modified(cmp, start, end, negated: negated)
         }
         if lower.contains("*") || lower.contains("?") {
             return .glob(Array(lower.utf8), negated: negated)

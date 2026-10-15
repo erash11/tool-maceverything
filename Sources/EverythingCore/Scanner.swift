@@ -186,28 +186,43 @@ public struct Scanner {
     /// treating the change as applied.
     @discardableResult
     public func refresh(_ index: FileIndex, dir: Int32, path: String, recursive: Bool) -> Bool {
+        refresh(SharedIndex(index), dir: dir, path: path, recursive: recursive)
+    }
+
+    /// Lists each folder from disk without holding the index lock, then takes the write lock
+    /// only to apply that one folder, so searches keep running during big rescans. The caller
+    /// must be the index's only writer for the duration (record ids must stay stable).
+    @discardableResult
+    public func refresh(_ shared: SharedIndex, dir: Int32, path: String, recursive: Bool) -> Bool {
         var complete = true
         var queue: [(String, Int32, Bool)] = [(path, dir, recursive)]
         while let (p, id, deep) = queue.popLast() {
-            guard let entries = list(p) else {
-                if FileManager.default.fileExists(atPath: p) {
-                    complete = false
-                } else if index.records[Int(id)].parent >= 0 {
-                    index.remove(id)
-                } else {
-                    // A root that disappeared keeps its record but loses everything under it.
-                    index.replaceChildren(of: id, with: [])
+            let entries = list(p)
+            let gone = entries == nil && !FileManager.default.fileExists(atPath: p)
+            let next: [(String, Int32, Bool)] = shared.write { index in
+                if index.records[Int(id)].isDeleted { return [] }
+                guard let entries else {
+                    if !gone {
+                        complete = false
+                    } else if index.records[Int(id)].parent >= 0 {
+                        index.remove(id)
+                    } else {
+                        // A root that disappeared keeps its record but loses everything under it.
+                        index.replaceChildren(of: id, with: [])
+                    }
+                    return []
                 }
-                continue
+                let newDirs = Set(index.replaceChildren(of: id, with: entries))
+                var out: [(String, Int32, Bool)] = []
+                for kid in index.childIds(of: id) where index.records[Int(kid)].isDirectory {
+                    guard deep || newDirs.contains(kid) else { continue }
+                    let kidPath = p == "/" ? "/" + index.name(of: kid) : p + "/" + index.name(of: kid)
+                    if exclusions.contains(kidPath) { continue }
+                    out.append((kidPath, kid, true))
+                }
+                return out
             }
-            let newDirs = Set(index.replaceChildren(of: id, with: entries))
-            for kid in index.childIds(of: id) where index.records[Int(kid)].isDirectory {
-                let isNew = newDirs.contains(kid)
-                guard deep || isNew else { continue }
-                let kidPath = p == "/" ? "/" + index.name(of: kid) : p + "/" + index.name(of: kid)
-                if exclusions.contains(kidPath) { continue }
-                queue.append((kidPath, kid, true))
-            }
+            queue.append(contentsOf: next)
         }
         return complete
     }
