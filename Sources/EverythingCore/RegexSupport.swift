@@ -83,61 +83,64 @@ enum RegexSupport {
     }
 
     /// Per name in one search chunk, for each regex term: 1 match, 0 no match, -1 unknown
-    /// (the caller then matches that name on its own). Names are joined by "\n" and each
-    /// line-safe regex runs once over the whole chunk.
-    static func chunkHits(lineRegexes: [NSRegularExpression?], recs: UnsafeBufferPointer<Record>,
+    /// (the caller then matches that name on its own). For each line-safe regex, the names
+    /// that contain its required literal (all names when it has none) are joined by "\n" and
+    /// the regex runs once over that text; names without the literal are 0 at once.
+    static func chunkHits(lineRegexes: [NSRegularExpression?], literalStart: [Int], literalLength: [Int],
+                          qbytes: UnsafeBufferPointer<UInt8>, recs: UnsafeBufferPointer<Record>,
                           lower: UnsafeBufferPointer<UInt8>, lo: Int, hi: Int) -> [Int8] {
         let n = hi - lo
         var hits = [Int8](repeating: -1, count: lineRegexes.count * n)
-        guard lineRegexes.contains(where: { $0 != nil }) else { return hits }
-        // Join live names, recording each one's UTF-16 start.
-        var bytes: [UInt8] = []
-        var lineStart: [Int] = []   // UTF-16 offset of each live name
-        var lineRecord: [Int] = []  // local index of each live name
-        var unit = 0
         let newline = UInt8(ascii: "\n")
-        for id in lo..<hi {
-            let r = recs[id]
-            if r.flags & 2 != 0 { continue }
-            let start = Int(r.lowerStart), end = start + Int(r.lowerLength)
-            lineStart.append(unit)
-            lineRecord.append(id - lo)
-            for b in start..<end {
-                let c = lower[b]
-                if c == newline { return hits } // a name with a newline: match names one by one
-                bytes.append(c)
-                unit += utf16Units(c)
+        for (k, regex) in lineRegexes.enumerated() {
+            guard let re = regex else { continue }
+            let litStart = literalStart[k], litLength = literalLength[k]
+            var bytes: [UInt8] = []
+            var lineStart: [Int] = []   // UTF-16 offset of each joined name
+            var lineRecord: [Int] = []  // local index of each joined name
+            var unit = 0
+            var sawNewline = false
+            for id in lo..<hi {
+                let r = recs[id]
+                if r.flags & 2 != 0 { continue }
+                let start = Int(r.lowerStart), len = Int(r.lowerLength)
+                if litLength > 0 && !containsBytes(lower, start, len, qbytes, litStart, litLength) {
+                    hits[k * n + id - lo] = 0
+                    continue
+                }
+                lineStart.append(unit)
+                lineRecord.append(id - lo)
+                for b in start..<start + len {
+                    let c = lower[b]
+                    if c == newline { sawNewline = true }
+                    bytes.append(c)
+                    unit += utf16Units(c)
+                }
+                bytes.append(newline)
+                unit += 1
             }
-            bytes.append(newline)
-            unit += 1
-        }
-        guard !lineStart.isEmpty,
-              let text = NSString(bytes: bytes, length: bytes.count, encoding: String.Encoding.utf8.rawValue)
-        else { return hits }
-        let total = unit
-        // The line holding UTF-16 offset `loc`, by binary search.
-        func line(of loc: Int) -> Int {
-            var a = 0, b = lineStart.count - 1
-            while a < b {
-                let m = (a + b + 1) / 2
-                if lineStart[m] <= loc { a = m } else { b = m - 1 }
-            }
-            return a
-        }
-        for (k, re) in lineRegexes.enumerated() {
-            guard let re else { continue }
+            // A name with a newline would split into two lines: leave candidates unknown.
+            if sawNewline || lineStart.isEmpty { continue }
+            guard let text = NSString(bytes: bytes, length: bytes.count, encoding: String.Encoding.utf8.rawValue)
+            else { continue }
+            let total = unit
             var matched = [Bool](repeating: false, count: lineStart.count)
             var spanned = false
             re.enumerateMatches(in: text as String, options: [], range: NSRange(location: 0, length: total)) { result, _, stop in
                 guard let range = result?.range, range.location < total else { return }
-                let l = line(of: range.location)
-                let lineEnd = (l + 1 < lineStart.count ? lineStart[l + 1] : total) - 1 // the "\n"
+                // The line holding the match start, by binary search.
+                var a = 0, b = lineStart.count - 1
+                while a < b {
+                    let m = (a + b + 1) / 2
+                    if lineStart[m] <= range.location { a = m } else { b = m - 1 }
+                }
+                let lineEnd = (a + 1 < lineStart.count ? lineStart[a + 1] : total) - 1 // the "\n"
                 if range.location + range.length > lineEnd {
                     spanned = true // a match ran into the next name: per-line answers unreliable
                     stop.pointee = true
                     return
                 }
-                matched[l] = true
+                matched[a] = true
             }
             if spanned { continue }
             for (l, local) in lineRecord.enumerated() { hits[k * n + local] = matched[l] ? 1 : 0 }

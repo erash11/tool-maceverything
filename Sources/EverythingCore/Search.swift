@@ -60,6 +60,9 @@ struct CompiledQuery {
     var regexes: [NSRegularExpression?] = []
     /// Same patterns compiled to run over newline-joined names; nil when not line-safe.
     var lineRegexes: [NSRegularExpression?] = []
+    /// Per regex: the required literal's offset and length in `bytes` (length 0 when none).
+    var regexLiteralStart: [Int] = []
+    var regexLiteralLength: [Int] = []
     /// Index into `terms` of each path: term; its PathTable is built per scan.
     var pathTerms: [Int] = []
     var hasRegex = false
@@ -112,6 +115,8 @@ struct CompiledQuery {
                 t.a = Int64(addBytes(lit))
                 t.b = Int64(lit.count)
             }
+            regexLiteralStart.append(Int(t.a))
+            regexLiteralLength.append(Int(t.b))
         case let .ext(list, neg):
             t.kind = Kind.ext; t.negated = neg; t.start = slotStart.count; t.length = list.count
             for suffix in list {
@@ -275,7 +280,10 @@ extension FileIndex {
                 // Regex terms run once over the chunk's names joined by newlines; the result
                 // says, per name, match / no match / unknown (then matched on its own).
                 let regexHits = compiled.hasRegex
-                    ? RegexSupport.chunkHits(lineRegexes: compiled.lineRegexes, recs: recs, lower: lower, lo: lo, hi: hi)
+                    ? RegexSupport.chunkHits(lineRegexes: compiled.lineRegexes,
+                                             literalStart: compiled.regexLiteralStart,
+                                             literalLength: compiled.regexLiteralLength, qbytes: qbytes,
+                                             recs: recs, lower: lower, lo: lo, hi: hi)
                     : []
                 regexHits.withUnsafeBufferPointer { hits in
                     for id in lo..<hi {
