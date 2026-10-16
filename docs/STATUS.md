@@ -11,7 +11,7 @@ First real numbers, 4.29M entries (`/` plus the CRASHBOX drive):
 
 | Measured on the Mac | First try | After fixes |
 | --- | --- | --- |
-| Full scan of `/` (4.06M entries) | 1,449 s | 228 s |
+| Full scan of `/` | 1,449 s (4.06M entries) | 228 to 279 s (3.87M without browser caches) |
 | Unreadable folders | 535 | 320 (root-only system folders) |
 | Scan end to index saved | 68 min | 23 s (sort 3.7 s) |
 | Startup from the saved index | n/a | a few seconds, no rescan |
@@ -19,7 +19,7 @@ First real numbers, 4.29M entries (`/` plus the CRASHBOX drive):
 
 Fixes that got there: normal scan priority, permission-denied folders not retried (errno),
 refresh retries only the failed folders, updates paused during a full scan, startup load
-skipped when a rescan already ran.
+skipped when a rescan already ran, browser caches skipped by folder name.
 
 | Measured on CI, 1.35M entries | Result | Target |
 | --- | --- | --- |
@@ -31,8 +31,8 @@ skipped when a rescan already ran.
 ## Next
 1. Work through the rest of the #2 checklist on the Mac (searches, menu-bar app, Option-Space,
    live updates, unplugging CRASHBOX).
-2. Record the numbers above on #3 and close it. Optional: exclude browser caches (Chrome cache
-   took 17 to 48 s per scan) and look at OneDrive folders that each take exactly 6.0 s.
+2. Record the numbers above on #3 and close it (GitHub MCP was down at the end of the
+   2026-10-16 session). Optional: look at OneDrive folders that each take exactly 6.0 s.
 3. Delete the `codex-review` and `codex-review-base` branches on GitHub, close #10.
 
 ## Open questions
@@ -45,4 +45,6 @@ skipped when a rescan already ran.
 - Codex code review is at its account usage limit; for another review use a subagent instead.
 - Index writes must stay on `IndexService.work`; `PathTable` relies on parent id < child id.
   Both were checked by review; keep them true when changing `Service.swift` or `FileIndex.swift`.
+- External drives with no FSEvents history (CRASHBOX reports event id 0, likely exFAT) are
+  rescanned at every daemon start by design (about 15 s for 220K entries).
 - CI benchmark times are noisy (FileManager scan varied 22 to 56 s on the same data).
