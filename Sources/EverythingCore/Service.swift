@@ -121,7 +121,10 @@ public final class IndexService {
     /// searchable; watching starts in the background.
     public func start() {
         lifecycle.lock()
-        if let loaded = loadIndex() {
+        if ready {
+            // A rescan requested before startup got the lock (ev --rescan right after launch)
+            // already built a fresh index; loading the saved file now would only redo work.
+        } else if let loaded = loadIndex() {
             index.replace(with: loaded)
             locked {
                 _ready = true
