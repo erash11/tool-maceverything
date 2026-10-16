@@ -57,9 +57,9 @@ Installed.
   Daemon:  $BIN_DIR/everythingd, started by launchd, log at ~/Library/Logs/everythingd.log
   App:     ~/Applications/MacEverything.app   (Option-Space opens search)
 
-One manual step: System Settings > Privacy & Security > Full Disk Access,
-click +, press Command-Shift-G, enter $BIN_DIR/everythingd, and turn it on.
-Then run:  ev --rescan
+First install only: System Settings > Privacy & Security > Full Disk Access,
+click +, press Command-Shift-G, enter $BIN_DIR/everythingd, and turn it on,
+then run  ev --rescan  once. Updates need neither; the daemon keeps itself current.
 MSG
 if ! security find-identity -v -p codesigning 2>/dev/null | grep -q -e '"MacEverything Local Signing"' -e '"Developer ID Application'; then
   echo
