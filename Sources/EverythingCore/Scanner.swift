@@ -225,23 +225,40 @@ public struct Scanner {
         return stats
     }
 
+    /// A folder a refresh could not list, though it still exists and did not deny permission.
+    public struct RefreshFailure: Equatable {
+        public var path: String
+        /// Whether the refresh was going to walk below it, so a retry must too.
+        public var recursive: Bool
+        public var errno: Int32
+    }
+
     /// Re-lists `dir` and, when `recursive`, every directory below it. New directories are
     /// always walked, since a folder moved in arrives with its contents. Returns false when a
     /// folder that still exists could not be read, so the caller can retry instead of
     /// treating the change as applied.
     @discardableResult
     public func refresh(_ index: FileIndex, dir: Int32, path: String, recursive: Bool) -> Bool {
-        refresh(SharedIndex(index), dir: dir, path: path, recursive: recursive)
+        refreshFailures(SharedIndex(index), dir: dir, path: path, recursive: recursive).isEmpty
+    }
+
+    @discardableResult
+    public func refresh(_ shared: SharedIndex, dir: Int32, path: String, recursive: Bool) -> Bool {
+        refreshFailures(shared, dir: dir, path: path, recursive: recursive).isEmpty
     }
 
     /// Lists each folder from disk without holding the index lock, then takes the write lock
     /// only to apply that one folder, so searches keep running during big rescans. The caller
     /// must be the index's only writer for the duration (record ids must stay stable).
-    @discardableResult
-    public func refresh(_ shared: SharedIndex, dir: Int32, path: String, recursive: Bool) -> Bool {
-        var complete = true
+    /// Returns the folders that failed, so the caller retries those alone: one unreadable
+    /// folder must not make a whole-volume refresh start over. Stops early when `cancelled`
+    /// returns true (a full scan is about to replace the index).
+    public func refreshFailures(_ shared: SharedIndex, dir: Int32, path: String, recursive: Bool,
+                                cancelled: () -> Bool = { false }) -> [RefreshFailure] {
+        var failures: [RefreshFailure] = []
         var queue: [(String, Int32, Bool)] = [(path, dir, recursive)]
         while let (p, id, deep) = queue.popLast() {
+            if cancelled() { return [] }
             var code: Int32 = 0
             let entries = list(p, error: &code)
             let gone = entries == nil && !FileManager.default.fileExists(atPath: p)
@@ -257,7 +274,7 @@ public struct Scanner {
                     if denied {
                         return []
                     } else if !gone {
-                        complete = false
+                        failures.append(RefreshFailure(path: p, recursive: deep, errno: code))
                     } else if index.records[Int(id)].parent >= 0 {
                         index.remove(id)
                     } else {
@@ -278,6 +295,6 @@ public struct Scanner {
             }
             queue.append(contentsOf: next)
         }
-        return complete
+        return failures
     }
 }

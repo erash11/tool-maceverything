@@ -121,6 +121,19 @@ final class MacTests: XCTestCase {
         XCTAssertNotNil(index.lookup(dir + "/a/b/two.PDF"), "an unreadable folder must not lose its entries")
     }
 
+    func testRefreshStopsWhenCancelled() throws {
+        let index = FileIndex()
+        let root = index.addRoot(dir)
+        Scanner().scanTree(into: index, root: root, rootPath: dir)
+        FileManager.default.createFile(atPath: dir + "/a/late.txt", contents: nil)
+        let failures = Scanner().refreshFailures(SharedIndex(index), dir: root, path: dir, recursive: true,
+                                                 cancelled: { true })
+        XCTAssertEqual(failures, [])
+        XCTAssertNil(index.lookup(dir + "/a/late.txt"), "a cancelled refresh must not keep walking")
+        XCTAssertTrue(Scanner().refresh(index, dir: root, path: dir, recursive: true))
+        XCTAssertNotNil(index.lookup(dir + "/a/late.txt"))
+    }
+
     func testDeletedRootIsEmptied() throws {
         let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-root.bin"))
         service.start()

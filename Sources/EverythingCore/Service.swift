@@ -33,6 +33,9 @@ public final class IndexService {
     private var _scanning = false
     private var _scanningRoot: String?
     private var _scannedSoFar = 0
+    /// A full scan is building a new index. Queued changes are dropped meanwhile: they would
+    /// go to the index about to be replaced, and the scan replays them from its own cursor.
+    private var _replacing = false
     private var _ready = false
     private var _lastScanSeconds: Double?
     private var _unwatchedRoots: [String] = []
@@ -229,7 +232,10 @@ public final class IndexService {
     }
 
     private func scanLocked() {
-        locked { _scanning = true }
+        locked {
+            _scanning = true
+            _replacing = true
+        }
         let started = Date()
         let fresh = FileIndex()
         scanRoots(roots, into: fresh)
@@ -244,6 +250,7 @@ public final class IndexService {
             pendingEventIds = [:]
             appliedEventIds = fresh.volumeState.mapValues(\.lastEventId)
             index.replace(with: fresh)
+            locked { _replacing = false }
         }
         locked {
             _lastScanSeconds = elapsed
@@ -329,6 +336,11 @@ public final class IndexService {
     /// Applies queued folder changes. Runs on `work`.
     private func flush() {
         flushScheduled = false
+        if locked({ _replacing }) {
+            pendingPaths = [:]
+            pendingEventIds = [:]
+            return
+        }
         let batch = pendingPaths
         let ids = pendingEventIds
         pendingPaths = [:]
@@ -370,24 +382,28 @@ public final class IndexService {
                 return (target, dir, recursive)
             }
             guard let (target, dir, recursive) = resolved else { continue }
-            if scanner.refresh(index, dir: dir, path: target, recursive: recursive) {
-                retries[path] = nil
-                if roots.contains(target) && !FileManager.default.fileExists(atPath: target) {
-                    offlineRoots.insert(target) // a drive was unplugged; rescanned when it returns
+            let failures = scanner.refreshFailures(index, dir: dir, path: target, recursive: recursive,
+                                                   cancelled: { self.locked { self._replacing } })
+            if !failures.contains(where: { $0.path == path }) { retries[path] = nil }
+            if failures.isEmpty && roots.contains(target) && !FileManager.default.fileExists(atPath: target) {
+                offlineRoots.insert(target) // a drive was unplugged; rescanned when it returns
+            }
+            // Retry only the folders that failed, not the whole request: a volume-wide refresh
+            // with one unreadable folder in it would otherwise re-list millions of entries.
+            for f in failures {
+                let attempts = (retries[f.path] ?? 0) + 1
+                if attempts > IndexService.maxRetries {
+                    // Persistently unreadable: stop holding the cursor back, or one folder
+                    // would stall every later save.
+                    let reason = f.errno != 0 ? String(cString: strerror(f.errno)) : "unknown error"
+                    log("giving up on \(f.path) after \(IndexService.maxRetries) failed refreshes (\(reason))")
+                    retries[f.path] = nil
+                    continue
                 }
-                continue
+                retries[f.path] = attempts
+                pendingPaths[f.path] = (pendingPaths[f.path] ?? false) || f.recursive
+                failedRoots.insert(rootFor(f.path))
             }
-            let attempts = (retries[path] ?? 0) + 1
-            if attempts > IndexService.maxRetries {
-                // Persistently unreadable (for example no permission): stop holding the
-                // cursor back, or one folder would stall every later save.
-                log("giving up on \(path) after \(IndexService.maxRetries) failed refreshes")
-                retries[path] = nil
-                continue
-            }
-            retries[path] = attempts
-            pendingPaths[path] = (pendingPaths[path] ?? false) || (batch[path] ?? false)
-            failedRoots.insert(rootFor(path))
         }
         if index.read({ $0.unsorted.count }) > 50_000 { sortOffLock() }
         dirty = true
