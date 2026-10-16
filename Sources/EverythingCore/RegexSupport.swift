@@ -41,6 +41,7 @@ enum RegexSupport {
                 if i < chars.count && chars[i] == "^" { i += 1 }
                 if i < chars.count && chars[i] == "]" { i += 1 }
                 while i < chars.count && chars[i] != "]" {
+                    if chars[i] == "[" { return nil } // nested class: its end is not the next "]"
                     if chars[i] == "\\" { i += 1 }
                     i += 1
                 }
