@@ -280,7 +280,10 @@ final class IndexTests: XCTestCase {
         index.add(ScannedEntry(name: "plan.txt", isDirectory: false, size: 1, modified: 0), parent: users)
         let lib = index.add(ScannedEntry(name: "Library", isDirectory: true, size: 0, modified: 0), parent: users)
         let cloud = index.add(ScannedEntry(name: "CloudStorage", isDirectory: true, size: 0, modified: 0), parent: lib)
-        index.add(ScannedEntry(name: "plan.docx", isDirectory: false, size: 1, modified: 0), parent: cloud)
+        let gdrive = index.add(ScannedEntry(name: "GoogleDrive-me@x.com", isDirectory: true, size: 0, modified: 0), parent: cloud)
+        index.add(ScannedEntry(name: "plan.docx", isDirectory: false, size: 1, modified: 0), parent: gdrive)
+        let onedrive = index.add(ScannedEntry(name: "OneDrive-Work", isDirectory: true, size: 0, modified: 0), parent: cloud)
+        index.add(ScannedEntry(name: "plan.xlsx", isDirectory: false, size: 1, modified: 0), parent: onedrive)
         let work = index.addRoot("/Volumes/Work Disk")
         index.add(ScannedEntry(name: "plan.mov", isDirectory: false, size: 1, modified: 0), parent: work)
         index.sortIfNeeded(force: true)
@@ -288,9 +291,11 @@ final class IndexTests: XCTestCase {
         func scoped(_ q: String, _ scope: SearchScope) -> [String] {
             index.search(Query.parse(q).and(Query.parse(scope.query)), options: SearchOptions(limit: 100)).hits.map(\.name)
         }
-        XCTAssertEqual(scoped("plan", .all), ["plan.docx", "plan.mov", "plan.txt"])
-        XCTAssertEqual(scoped("plan", .thisMac), ["plan.docx", "plan.txt"])
-        XCTAssertEqual(scoped("plan", .cloud), ["plan.docx"])
+        XCTAssertEqual(scoped("plan", .all), ["plan.docx", "plan.mov", "plan.txt", "plan.xlsx"])
+        XCTAssertEqual(scoped("plan", .thisMac), ["plan.docx", "plan.txt", "plan.xlsx"])
+        XCTAssertEqual(scoped("plan", .cloud), ["plan.docx", "plan.xlsx"])
+        XCTAssertEqual(scoped("plan", .cloudFolder("/Users/Library/CloudStorage/GoogleDrive-me@x.com")), ["plan.docx"])
+        XCTAssertEqual(scoped("plan", .cloudFolder("/Users/Library/CloudStorage/OneDrive-Work")), ["plan.xlsx"])
         XCTAssertEqual(scoped("plan", .drive("/Volumes/Work Disk")), ["plan.mov"])
         // A typed "|" must not join the scope's group: the scope still applies.
         XCTAssertEqual(scoped("plan |", .drive("/Volumes/Work Disk")), ["plan.mov"])
@@ -309,10 +314,26 @@ final class IndexTests: XCTestCase {
         let withCloud = SearchScope.choices(roots: ["/"], home: "/h", exists: { $0 == "/h/Library/CloudStorage" })
         XCTAssertEqual(withCloud, [.all, .thisMac, .cloud])
 
-        for scope in [SearchScope.all, .thisMac, .cloud, .drive("/Volumes/My Drive")] {
+        let accounts = SearchScope.choices(
+            roots: ["/", "/Volumes/CRASHBOX"], home: "/h",
+            exists: { $0 == "/h/Library/CloudStorage" || $0 == "/h/Library/Mobile Documents/com~apple~CloudDocs" },
+            list: { $0 == "/h/Library/CloudStorage" ? ["OneDrive-Baylor", ".DS_Store", "GoogleDrive-me@x.com", "Box-Box"] : [] })
+        XCTAssertEqual(accounts, [.all, .thisMac, .cloud,
+                                  .cloudFolder("/h/Library/CloudStorage/Box-Box"),
+                                  .cloudFolder("/h/Library/CloudStorage/GoogleDrive-me@x.com"),
+                                  .cloudFolder("/h/Library/CloudStorage/OneDrive-Baylor"),
+                                  .cloudFolder("/h/Library/Mobile Documents"),
+                                  .drive("/Volumes/CRASHBOX")])
+        XCTAssertEqual(accounts.map(\.title), ["All", "This Mac", "Cloud", "Box", "Google Drive (me@x.com)",
+                                               "OneDrive (Baylor)", "iCloud Drive", "CRASHBOX"])
+        XCTAssertEqual(SearchScope.cloudFolder("/h/Library/CloudStorage/Dropbox").title, "Dropbox")
+
+        for scope in [SearchScope.all, .thisMac, .cloud, .drive("/Volumes/My Drive"),
+                      .cloudFolder("/h/Library/CloudStorage/GoogleDrive-me@x.com")] {
             XCTAssertEqual(SearchScope(id: scope.id), scope)
         }
         XCTAssertNil(SearchScope(id: "drive:"))
+        XCTAssertNil(SearchScope(id: "cloud:"))
         XCTAssertEqual(SearchScope.drive("/Volumes/CRASHBOX").title, "CRASHBOX")
     }
 

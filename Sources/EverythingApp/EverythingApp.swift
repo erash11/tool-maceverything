@@ -118,7 +118,7 @@ final class SearchModel: ObservableObject {
         self.descending = descending
         run()
     }
-    /// What the scope menu offers: All, This Mac, Cloud, then each indexed drive.
+    /// What the scope menu offers: All, This Mac, Cloud, each cloud account, then each indexed drive.
     @Published var scopes: [SearchScope] = [.all]
     @Published var scope = SearchScope.all {
         didSet {
@@ -239,7 +239,7 @@ struct SearchView: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .fixedSize()
-                .help("Limit results to one drive, this Mac, or synced cloud folders")
+                .help("Limit results to one drive, this Mac, all synced cloud folders, or one cloud account")
                 TextField("Search", text: $model.query)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 15))

@@ -8,6 +8,9 @@ public enum SearchScope: Hashable {
     case thisMac
     /// Synced cloud folders: File Provider (Google Drive, Dropbox, Box), OneDrive, iCloud Drive.
     case cloud
+    /// One synced cloud account's folder, by full path: a ~/Library/CloudStorage entry
+    /// (Google Drive, OneDrive, Dropbox, Box) or iCloud Drive.
+    case cloudFolder(String)
     /// One indexed root other than "/", usually an external drive.
     case drive(String)
 
@@ -17,6 +20,7 @@ public enum SearchScope: Hashable {
         case .all: return "all"
         case .thisMac: return "mac"
         case .cloud: return "cloud"
+        case .cloudFolder(let path): return "cloud:" + path
         case .drive(let root): return "drive:" + root
         }
     }
@@ -27,6 +31,10 @@ public enum SearchScope: Hashable {
         case "mac": self = .thisMac
         case "cloud": self = .cloud
         default:
+            if id.hasPrefix("cloud:"), id.count > 6 {
+                self = .cloudFolder(String(id.dropFirst(6)))
+                return
+            }
             guard id.hasPrefix("drive:"), id.count > 6 else { return nil }
             self = .drive(String(id.dropFirst(6)))
         }
@@ -37,8 +45,24 @@ public enum SearchScope: Hashable {
         case .all: return "All"
         case .thisMac: return "This Mac"
         case .cloud: return "Cloud"
+        case .cloudFolder(let path): return SearchScope.cloudTitle(path)
         case .drive(let root): return (root as NSString).lastPathComponent
         }
+    }
+
+    /// Provider names for CloudStorage folder prefixes ("GoogleDrive-me@x.com").
+    static let providers = ["GoogleDrive": "Google Drive", "OneDrive": "OneDrive", "Dropbox": "Dropbox", "Box": "Box"]
+
+    /// "GoogleDrive-me@x.com" → "Google Drive (me@x.com)", "Box-Box" → "Box", Mobile Documents →
+    /// "iCloud Drive". The account stays in the title so two accounts of one provider differ.
+    static func cloudTitle(_ path: String) -> String {
+        let name = (path as NSString).lastPathComponent
+        if name == "Mobile Documents" { return "iCloud Drive" }
+        let parts = name.split(separator: "-", maxSplits: 1).map(String.init)
+        guard let first = parts.first else { return name }
+        let provider = providers[first] ?? first
+        guard parts.count == 2, parts[1] != first else { return provider }
+        return "\(provider) (\(parts[1]))"
     }
 
     /// Folder fragments that mark a synced cloud folder, matched anywhere in the path.
@@ -50,18 +74,27 @@ public enum SearchScope: Hashable {
         case .all: return ""
         case .thisMac: return "!path:/volumes/"
         case .cloud: return SearchScope.cloudPaths.map { "\"path:\($0)\"" }.joined(separator: " | ")
-        case .drive(let root): return "\"path:\(root)/\""
+        case .cloudFolder(let path), .drive(let path): return "\"path:\(path)/\""
         }
     }
 
-    /// The scopes worth offering: every root other than "/" as a drive, and Cloud when a synced
-    /// cloud folder exists in `home`.
+    /// The scopes worth offering: Cloud when a synced cloud folder exists in `home`, then each
+    /// cloud account on its own, then every root other than "/" as a drive.
     public static func choices(roots: [String], home: String = NSHomeDirectory(),
-                               exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> [SearchScope] {
+                               exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+                               list: (String) -> [String] = { (try? FileManager.default.contentsOfDirectory(atPath: $0)) ?? [] })
+                               -> [SearchScope] {
         var out: [SearchScope] = [.all, .thisMac]
         let cloudFolders = ["/Library/CloudStorage", "/Library/Mobile Documents/com~apple~CloudDocs",
                             "/Library/Group Containers/UBF8T346G9.OneDriveStandaloneSuite"]
         if cloudFolders.contains(where: { exists(home + $0) }) { out.append(.cloud) }
+        let storage = home + "/Library/CloudStorage"
+        for name in list(storage).sorted() where !name.hasPrefix(".") {
+            out.append(.cloudFolder(storage + "/" + name))
+        }
+        if exists(home + "/Library/Mobile Documents/com~apple~CloudDocs") {
+            out.append(.cloudFolder(home + "/Library/Mobile Documents"))
+        }
         for root in roots where root != "/" { out.append(.drive(root)) }
         return out
     }

@@ -10,6 +10,9 @@ memory 16 to 30 MB. Detail of the first real-Mac day: `docs/handoffs/2026-10-16-
 Search window, all confirmed on the Mac: scope menu (All, This Mac, Cloud, each drive), file-type
 menu (Everything's filters), "Show temp files" toggle (temp hidden by default), header sorting,
 right-click column chooser, drag to reorder, default columns Name | Type | Path.
+Scope menu also lists each cloud account (Google Drive, OneDrive, Dropbox, Box per
+~/Library/CloudStorage folder, plus iCloud Drive) under Cloud, added 2026-10-16: built and
+query-checked on the Mac with `ev`, window not yet seen.
 
 | Measured on CI, 1.35M entries | Result |
 | --- | --- |
