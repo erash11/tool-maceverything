@@ -19,10 +19,9 @@ a real Mac yet. Detail: `docs/handoffs/2026-10-16-v0.1-build.md`.
    `~/.local/bin/everythingd`, run `ev --rescan`. Work through the #2 checklist.
 2. Record `ev --bench ~` and first-scan time (#3).
 3. Delete the `codex-review` and `codex-review-base` branches on GitHub, close #10.
-4. After a week of use, decide #9 (keep building vs Find Any File / HoudahSpot).
 
 ## Open questions
-- #9: is a custom tool worth it over Find Any File or HoudahSpot?
+- None. #9 decided 2026-10-16: keep building (see `docs/DECISIONS.md`).
 
 ## Gotchas
 - No Swift toolchain in Claude cloud sessions: CI (`.github/workflows/ci.yml`) is the compiler
