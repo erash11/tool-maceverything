@@ -108,8 +108,15 @@ final class SearchModel: ObservableObject {
     @Published var query = "" { didSet { run() } }
     @Published var hits: [SearchHit] = []
     @Published var message = ""
-    @Published var sort = SortKey.name { didSet { run() } }
-    @Published var descending = false { didSet { run() } }
+    @Published private(set) var sort = SortKey.name
+    @Published private(set) var descending = false
+
+    /// Changes the sort and searches once (setting the two fields separately would search twice).
+    func setSort(_ key: SortKey, descending: Bool) {
+        sort = key
+        self.descending = descending
+        run()
+    }
     /// What the scope menu offers: All, This Mac, Cloud, then each indexed drive.
     @Published var scopes: [SearchScope] = [.all]
     @Published var scope = SearchScope.all {
@@ -207,6 +214,7 @@ final class SearchModel: ObservableObject {
 struct SearchView: View {
     @ObservedObject var model: SearchModel
     @State private var selection = Set<String>()
+    @State private var sortOrder = [KeyPathComparator(\SearchHit.name)]
     @FocusState private var fieldFocused: Bool
 
     private static let dateFormatter: DateFormatter = {
@@ -244,26 +252,46 @@ struct SearchView: View {
                 .help("Only show one kind of file, as in Everything's Search menu")
             }
             .padding(10)
-            Table(model.hits, selection: $selection) {
-                TableColumn("Name") { hit in
+            Table(model.hits, selection: $selection, sortOrder: $sortOrder) {
+                TableColumn("Name", value: \.name) { hit in
                     Label(hit.name, systemImage: hit.isDirectory ? "folder" : "doc")
                 }
-                TableColumn("Folder") { hit in
+                TableColumn("Folder", value: \.path) { hit in
                     Text((hit.path as NSString).deletingLastPathComponent)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                TableColumn("Size") { hit in
+                TableColumn("Size", value: \.size) { hit in
                     Text(hit.isDirectory ? "" : ByteCountFormatter.string(fromByteCount: hit.size, countStyle: .file))
                         .monospacedDigit()
                 }
                 .width(min: 60, ideal: 80, max: 120)
-                TableColumn("Modified") { hit in
+                TableColumn("Modified", value: \.modified) { hit in
                     Text(Self.dateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(hit.modified))))
                         .monospacedDigit()
                 }
                 .width(min: 110, ideal: 140, max: 180)
+            }
+            // Clicking a header sorts by it; clicking again flips the order. The daemon does the
+            // sorting, so it covers every match, not only the rows on screen.
+            .onChange(of: sortOrder) { order in
+                guard let first = order.first else { return }
+                let column = first.keyPath
+                let key: SortKey
+                if column == \SearchHit.path as PartialKeyPath<SearchHit> {
+                    key = .path
+                } else if column == \SearchHit.size as PartialKeyPath<SearchHit> {
+                    key = .size
+                } else if column == \SearchHit.modified as PartialKeyPath<SearchHit> {
+                    key = .modified
+                } else {
+                    key = .name
+                }
+                let descending = first.order == .reverse
+                if model.sort != key || model.descending != descending {
+                    model.setSort(key, descending: descending)
+                }
             }
             .contextMenu(forSelectionType: String.self) { paths in
                 Button("Open") { open(paths, reveal: false) }
@@ -275,15 +303,6 @@ struct SearchView: View {
             HStack {
                 Text(model.message).font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Picker("Sort", selection: $model.sort) {
-                    Text("Name").tag(SortKey.name)
-                    Text("Path").tag(SortKey.path)
-                    Text("Size").tag(SortKey.size)
-                    Text("Modified").tag(SortKey.modified)
-                }
-                .pickerStyle(.menu)
-                .frame(width: 150)
-                Toggle("Descending", isOn: $model.descending).toggleStyle(.checkbox)
                 Toggle("Show temp files", isOn: $model.showTemp).toggleStyle(.checkbox)
                     .help("Temp and generated files: node_modules, .git, build folders, caches, *.tmp, system temp folders")
             }
