@@ -28,5 +28,5 @@ Tracked in GitHub issues: https://github.com/erash11/MacEverything/issues
 - Performance: done. #4 and #5 (`path:` and `regex:` speed) met their targets. #6 (`searchfs()`)
   was measured at about 10% faster and closed: the folder walk stays the default and
   `ev --bench-searchfs` remains as a diagnostic.
-- Release: #7 (Developer ID signing)
-- Review and decisions: #8 (independent review of post-Codex fixes), #9 (build vs buy), #10 (review PR closed; delete its two branches on GitHub)
+- Release: #7 done (stable signing identity; `scripts/create-signing-cert.sh`)
+- Review and decisions: #8 done (Sonnet review of post-Codex changes: 5 findings fixed), #9 (build vs buy), #10 (review PR closed; delete its two branches on GitHub)
