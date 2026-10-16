@@ -29,4 +29,4 @@ Tracked in GitHub issues: https://github.com/erash11/MacEverything/issues
   was measured at about 10% faster and closed: the folder walk stays the default and
   `ev --bench-searchfs` remains as a diagnostic.
 - Release: #7 (Developer ID signing)
-- Review and decisions: #8 (independent review of post-Codex fixes), #9 (build vs buy), #10 (remove review PR)
+- Review and decisions: #8 (independent review of post-Codex fixes), #9 (build vs buy), #10 (review PR closed; delete its two branches on GitHub)
