@@ -34,3 +34,24 @@ jobs:
           .build/release/ev --bench-searchfs /System/Volumes/Data
       - name: Bundle the app
         run: ./scripts/make-app.sh && ls -la build
+      - name: Stable signing identity (issue 7)
+        run: |
+          ./scripts/create-signing-cert.sh --ci
+          ./scripts/make-app.sh | tee sign.log
+          grep -q 'Signed with: MacEverything Local Signing' sign.log
+          codesign --verify --strict --verbose=2 build/everythingd build/ev build/MacEverything.app
+          # A different build of the daemon, signed the same way, stands in for "a rebuild".
+          swift build -c debug --product everythingd
+          cp .build/debug/everythingd build/everythingd-rebuilt
+          codesign --force --options runtime --sign "MacEverything Local Signing" \
+            --identifier com.erash11.maceverything.daemon build/everythingd-rebuilt
+          req1="$(codesign -d -r- build/everythingd 2>&1 | grep designated)"
+          req2="$(codesign -d -r- build/everythingd-rebuilt 2>&1 | grep designated)"
+          hash1="$(codesign -dvvv build/everythingd 2>&1 | grep '^CDHash=')"
+          hash2="$(codesign -dvvv build/everythingd-rebuilt 2>&1 | grep '^CDHash=')"
+          echo "release: $hash1"; echo "debug:   $hash2"; echo "requirement: $req1"
+          [ "$hash1" != "$hash2" ]                      # different binaries
+          [ "$req1" = "$req2" ]                         # same requirement, so TCC grants carry over
+          echo "$req1" | grep -q 'certificate leaf'
+          echo "$req1" | grep -q 'identifier "com.erash11.maceverything.daemon"'
+          ! echo "$req1" | grep -q cdhash

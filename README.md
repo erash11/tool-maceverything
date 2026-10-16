@@ -21,6 +21,21 @@ Needs Xcode or the Xcode Command Line Tools (`xcode-select --install`), macOS 13
 Then give `~/.local/bin/everythingd` Full Disk Access (the installer prints the steps) and run
 `ev --rescan`.
 
+### Keep Full Disk Access across rebuilds (recommended, once per Mac)
+
+macOS ties Full Disk Access to the code signature. Ad-hoc signatures change with every build,
+so the grant is lost each time. Sign with a stable identity instead:
+
+```bash
+./scripts/create-signing-cert.sh   # free self-signed certificate; asks for your password once
+./scripts/install.sh               # now signs with "MacEverything Local Signing"
+```
+
+Grant Full Disk Access one more time after that install; later rebuilds keep it. If a
+"Developer ID Application" certificate is in your keychain, `make-app.sh` uses it instead
+(needed only to give the app to other Macs). Set `MEV_SIGN_IDENTITY` to choose explicitly, or
+`-` for ad-hoc.
+
 ## Query syntax
 
 | Query | Matches |

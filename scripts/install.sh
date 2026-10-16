@@ -61,3 +61,8 @@ One manual step: System Settings > Privacy & Security > Full Disk Access,
 click +, press Command-Shift-G, enter $BIN_DIR/everythingd, and turn it on.
 Then run:  ev --rescan
 MSG
+if ! security find-identity -v -p codesigning 2>/dev/null | grep -q -e '"MacEverything Local Signing"' -e '"Developer ID Application'; then
+  echo
+  echo "Tip: run ./scripts/create-signing-cert.sh once, then reinstall, so Full Disk Access"
+  echo "survives future rebuilds."
+fi
