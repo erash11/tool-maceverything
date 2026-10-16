@@ -102,6 +102,15 @@ final class SearchModel: ObservableObject {
         }
     }
     private var restoring = false
+    /// The file-type menu at the end of the search box (Everything's Search > filters).
+    @Published var filter: FileFilter = FileFilter(rawValue: UserDefaults.standard.string(forKey: SearchModel.filterKey) ?? "")
+        ?? .everything {
+        didSet {
+            UserDefaults.standard.set(filter.rawValue, forKey: SearchModel.filterKey)
+            run()
+        }
+    }
+    private static let filterKey = "searchFilter"
 
     private static let scopeKey = "searchScope"
     private let queue = DispatchQueue(label: "MacEverything.app.search")
@@ -137,7 +146,7 @@ final class SearchModel: ObservableObject {
         generation += 1
         let gen = generation
         let request = IPCRequest(command: "search", query: query, limit: 500, sort: sort, descending: descending,
-                                 scope: scope.query)
+                                 scope: [scope.query, filter.query].filter { !$0.isEmpty }.joined(separator: " "))
         queue.async {
             let text: String
             var newHits: [SearchHit] = []
@@ -197,6 +206,15 @@ struct SearchView: View {
                     .font(.system(size: 15))
                     .focused($fieldFocused)
                     .onSubmit { openSelection(reveal: false) }
+                Picker("Type", selection: $model.filter) {
+                    ForEach(FileFilter.allCases, id: \.self) { filter in
+                        Text(filter.title).tag(filter)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+                .help("Only show one kind of file, as in Everything's Search menu")
             }
             .padding(10)
             Table(model.hits, selection: $selection) {

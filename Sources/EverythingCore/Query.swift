@@ -81,6 +81,9 @@ public struct Query {
         // "!file:" means folders and "!folder:" means files.
         if lower == "file:" { return negated ? .foldersOnly : .filesOnly }
         if lower == "folder:" { return negated ? .filesOnly : .foldersOnly }
+        if let filter = FileFilter.forKeyword(lower), let list = FileFilter.extensions[filter] {
+            return .ext(list.map { Array(("." + $0).utf8) }, negated: negated)
+        }
         if lower.hasPrefix("ext:") {
             let exts = lower.dropFirst(4).split(separator: ";").map { Array(("." + $0).utf8) }
             return exts.isEmpty ? nil : .ext(exts, negated: negated)

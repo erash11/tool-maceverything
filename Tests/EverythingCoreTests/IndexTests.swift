@@ -315,4 +315,23 @@ final class IndexTests: XCTestCase {
         XCTAssertNil(SearchScope(id: "drive:"))
         XCTAssertEqual(SearchScope.drive("/Volumes/CRASHBOX").title, "CRASHBOX")
     }
+
+    func testFileTypeFilters() {
+        let index = makeIndex()
+        func filtered(_ q: String, _ f: FileFilter) -> [String] {
+            index.search(Query.parse(q).and(Query.parse(f.query)), options: SearchOptions(limit: 100)).hits.map(\.name)
+        }
+        XCTAssertEqual(filtered("", .video), ["game1.mp4"])
+        XCTAssertEqual(filtered("", .document), ["notes.txt", "q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(filtered("report", .document), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(filtered("", .folder), ["film", "Reports"])
+        XCTAssertEqual(filtered("", .audio), [])
+        XCTAssertEqual(names(index, "!video: film/"), ["notes.txt"])
+        XCTAssertEqual(names(index, "VIDEO:"), ["game1.mp4"])
+        for f in FileFilter.allCases where f != .everything && f != .folder {
+            XCTAssertEqual(FileFilter.forKeyword(f.keyword!), f)
+            XCTAssertFalse(FileFilter.extensions[f]!.isEmpty)
+        }
+        XCTAssertEqual(FileFilter.compressed.title, "Compressed")
+    }
 }

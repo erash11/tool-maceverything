@@ -73,3 +73,60 @@ extension Query {
         Query(groups: groups + other.groups)
     }
 }
+
+/// The search window's file-type menu, after Everything's Search > filters. Each one is plain
+/// query text ANDed with the search, like a scope, and each has a typed keyword (`audio:` etc.).
+public enum FileFilter: String, CaseIterable, Hashable {
+    case everything, audio, compressed, document, executable, folder, picture, video
+
+    public var title: String {
+        self == .everything ? "Everything" : rawValue.prefix(1).uppercased() + rawValue.dropFirst()
+    }
+
+    /// The keyword a search can type for the same filter.
+    public var keyword: String? {
+        switch self {
+        case .everything: return nil
+        case .audio: return "audio:"
+        case .compressed: return "zip:"
+        case .document: return "doc:"
+        case .executable: return "exe:"
+        case .folder: return "folder:"
+        case .picture: return "pic:"
+        case .video: return "video:"
+        }
+    }
+
+    /// The query text this filter adds.
+    public var query: String { keyword ?? "" }
+
+    /// Extensions per filter: Everything's lists, plus common Mac formats.
+    static let extensions: [FileFilter: [String]] = [
+        .audio: ["aac", "ac3", "aif", "aifc", "aiff", "alac", "amr", "ape", "au", "caf", "cda", "dts", "fla", "flac",
+                 "it", "m1a", "m2a", "m3u", "m4a", "m4r", "mid", "midi", "mka", "mod", "mp2", "mp3", "mpa", "ogg",
+                 "opus", "ra", "rmi", "snd", "spc", "umx", "voc", "wav", "wma", "xm"],
+        .compressed: ["7z", "ace", "arj", "bz2", "cab", "cpio", "gz", "gzip", "jar", "lz", "lzma", "rar", "sit",
+                      "sitx", "tar", "tbz", "tbz2", "tgz", "txz", "xar", "xip", "xz", "z", "zip", "zst"],
+        .document: ["c", "chm", "cpp", "csv", "cxx", "doc", "docm", "docx", "dot", "dotm", "dotx", "epub", "h",
+                    "hpp", "htm", "html", "hxx", "ini", "java", "json", "key", "lua", "md", "mht", "mhtml",
+                    "numbers", "odp", "ods", "odt", "pages", "pdf", "potm", "potx", "ppam", "pps", "ppsm", "ppsx",
+                    "ppt", "pptm", "pptx", "rtf", "rtfd", "sldm", "sldx", "tex", "thmx", "tsv", "txt", "vsd",
+                    "wpd", "wps", "wri", "xlam", "xls", "xlsb", "xlsm", "xlsx", "xltm", "xltx", "xml", "yaml",
+                    "yml"],
+        .executable: ["app", "bat", "cmd", "command", "dmg", "exe", "msi", "msp", "pkg", "scr", "sh", "tool",
+                      "workflow", "zsh"],
+        .picture: ["ani", "arw", "avif", "bmp", "cr2", "cr3", "dng", "gif", "heic", "heif", "ico", "icns", "jpe",
+                   "jpeg", "jpg", "jxl", "nef", "orf", "pcx", "png", "psd", "raf", "raw", "rw2", "svg", "tga",
+                   "tif", "tiff", "webp", "wmf"],
+        .video: ["3g2", "3gp", "3gp2", "3gpp", "amv", "asf", "avi", "bdmv", "bik", "divx", "drc", "dv", "evo",
+                 "f4v", "flc", "fli", "flic", "flv", "hdmov", "ifo", "ivf", "m1v", "m2p", "m2t", "m2ts", "m2v",
+                 "m4b", "m4p", "m4v", "mkv", "mod", "mov", "mp2v", "mp4", "mp4v", "mpe", "mpeg", "mpg", "mpls",
+                 "mpv2", "mpv4", "mts", "mxf", "ogm", "ogv", "qt", "ram", "rm", "rmvb", "swf", "tod", "tp", "ts",
+                 "vob", "webm", "wm", "wmv"],
+    ]
+
+    /// The filter a typed keyword names (`audio:`, `zip:`, `doc:`, `exe:`, `pic:`, `video:`).
+    static func forKeyword(_ lower: String) -> FileFilter? {
+        allCases.first { $0 != .folder && $0.keyword == lower }
+    }
+}

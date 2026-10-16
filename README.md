@@ -48,6 +48,7 @@ Grant Full Disk Access one more time after that install; later rebuilds keep it.
 | `ext:mp4;mov` | any listed extension |
 | `path:Football` | the word anywhere in the full path |
 | `drive:CRASHBOX` | only that drive (also the scope menu in the search window) |
+| `audio:` `zip:` `doc:` `exe:` `pic:` `video:` | file types (also the type menu in the search window) |
 | `size:>1gb`, `size:<10kb` | file size |
 | `dm:today`, `dm:thisweek`, `dm:>2026-10-01` | date modified |
 | `regex:^IMG_\d+` | regular expression on the name |
