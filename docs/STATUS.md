@@ -21,6 +21,9 @@ Fixes that got there: normal scan priority, permission-denied folders not retrie
 refresh retries only the failed folders, updates paused during a full scan, startup load
 skipped when a rescan already ran, browser caches skipped by folder name.
 
+Search window has a scope menu (All, This Mac, Cloud, each drive) and `drive:NAME`; confirmed on
+the Mac 2026-10-16. The window reruns its search on open and retries while the daemon restarts.
+
 | Measured on CI, 1.35M entries | Result | Target |
 | --- | --- | --- |
 | First scan (getattrlistbulk) | 15 to 22 s (one 58 s outlier) | under 60 s for 2M |
