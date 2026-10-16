@@ -262,6 +262,15 @@ final class MacTests: XCTestCase {
         XCTAssertEqual(b.subtracting(a), [], "only in walk")
     }
 
+    func testSaveBeforeReadyKeepsTheIndexFile() throws {
+        let url = URL(fileURLWithPath: dir + "-early.bin")
+        try Data("existing index".utf8).write(to: url)
+        let service = IndexService(roots: [dir], indexURL: url) // not started: not ready
+        XCTAssertFalse(service.handle(IPCRequest(command: "save")).ok)
+        try service.save()
+        XCTAssertEqual(try String(contentsOf: url), "existing index")
+    }
+
     func testConcurrentRescansAreSerialized() {
         let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-rescan.bin"))
         service.start()

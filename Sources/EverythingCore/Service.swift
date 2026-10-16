@@ -420,6 +420,9 @@ public final class IndexService {
 
     /// Runs on `work`, so no change can be applied between choosing the event ids and writing.
     private func saveOnWork() throws {
+        // Before the first load or scan finishes, the index is empty; saving it would
+        // overwrite a good index file.
+        guard ready else { return }
         flush()
         let applied = appliedEventIds
         sortOffLock()
@@ -462,6 +465,10 @@ public final class IndexService {
             DispatchQueue.global().async { self.fullScan() }
             return IPCResponse(ok: true, status: status())
         case "save":
+            guard ready else {
+                return IPCResponse(ok: false, error: "the index is still being built; nothing to save yet",
+                                   status: status())
+            }
             do { try save(); return IPCResponse(ok: true) } catch {
                 return IPCResponse(ok: false, error: "\(error)")
             }

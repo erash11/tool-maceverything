@@ -6,7 +6,10 @@ enum RegexSupport {
     /// before running the regex engine. Conservative: anything it does not understand
     /// (alternation, groups, classes, escapes such as \d) ends the current literal run.
     static func requiredLiteral(_ pattern: String) -> String? {
-        if pattern.contains("|") { return nil }
+        // Give up on constructs whose extent this scanner cannot follow: alternation, group
+        // modes such as (?x) (which can make spaces insignificant), nested or POSIX classes,
+        // and quoted runs.
+        for bad in ["|", "(?", "[[", "[:", "\\Q"] where pattern.contains(bad) { return nil }
         let chars = Array(pattern)
         var best: [Character] = []
         var run: [Character] = []
@@ -24,7 +27,11 @@ enum RegexSupport {
                 guard i < chars.count else { flush(); break }
                 let e = chars[i]
                 if e.isLetter || e.isNumber {
-                    flush() // \d, \w, \b, \1, \x41, ... are not plain literals
+                    // Only escapes that take no argument are safe to step over. Others
+                    // (\x41, \u00e9, \p{L}, \cJ, \0101, \k<n>, \1, ...) are followed by
+                    // characters that are not literal text, so no literal can be proven.
+                    guard "bBdDwWsS".contains(e) else { return nil }
+                    flush()
                 } else if depth == 0 {
                     run.append(e) // \. \_ \- \( ... are the character itself
                 }
@@ -112,7 +119,14 @@ enum RegexSupport {
                 lineRecord.append(id - lo)
                 for b in start..<start + len {
                     let c = lower[b]
-                    if c == newline { sawNewline = true }
+                    // ICU's multiline anchors also break lines at \r, U+0085, U+2028 and
+                    // U+2029 (UTF-8 C2 85, E2 80 A8, E2 80 A9).
+                    if c == newline || c == 0x0D
+                        || (c == 0xC2 && b + 1 < start + len && lower[b + 1] == 0x85)
+                        || (c == 0xE2 && b + 2 < start + len && lower[b + 1] == 0x80
+                            && (lower[b + 2] == 0xA8 || lower[b + 2] == 0xA9)) {
+                        sawNewline = true
+                    }
                     bytes.append(c)
                     unit += utf16Units(c)
                 }
@@ -121,7 +135,10 @@ enum RegexSupport {
             }
             // A name with a newline would split into two lines: leave candidates unknown.
             if sawNewline || lineStart.isEmpty { continue }
-            guard let text = NSString(bytes: bytes, length: bytes.count, encoding: String.Encoding.utf8.rawValue)
+            // The UTF-16 offsets computed above must match the string (a leading byte order
+            // mark could be dropped by the conversion); otherwise leave these names unknown.
+            guard let text = NSString(bytes: bytes, length: bytes.count, encoding: String.Encoding.utf8.rawValue),
+                  text.length == unit
             else { continue }
             let total = unit
             var matched = [Bool](repeating: false, count: lineStart.count)

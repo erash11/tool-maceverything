@@ -202,7 +202,9 @@ final class IndexTests: XCTestCase {
         let all = (0..<Int32(index.records.count)).filter { !index.records[Int($0)].isDeleted }
         for pattern in ["^[0-9]+$", "\\.plist$", "^lib.*\\.dylib$", "^img_\\d+", "ée\\d", "^thrée\\d+\\.md$", "^a1", "(jpg|md)$",
                         // Not line-safe, or spanning names: these take the per-name fallback.
-                        "a[^q]*txt", "^a(?=1)", "^(?i)A", "\\.txt\\s?$", "zzz"] {
+                        "a[^q]*txt", "^a(?=1)", "^(?i)A", "\\.txt\\s?$",
+                        // Escapes with arguments and POSIX classes (no literal can be proven).
+                        "thr\\u00e9e", "^\\x61\\d", "[[:digit:]]\\.txt", "zzz"] {
             let re = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
             let expected = Set(all.filter { id in
                 let s = FileIndex.searchForm(index.name(of: id))
@@ -233,5 +235,41 @@ final class IndexTests: XCTestCase {
         XCTAssertFalse(RegexSupport.isLineSafe("\\Afoo"))
         XCTAssertFalse(RegexSupport.isLineSafe("a\\sb"))
         XCTAssertFalse(RegexSupport.isLineSafe("a\\cJb"))
+    }
+
+    func testRequiredLiteralGivesUpOnEscapesWithArguments() {
+        for p in ["caf\\u00e9", "\\x41bc", "\\pLfoo", "\\cJx", "\\0101", "(?<n>a)\\k<n>",
+                  "[[:digit:]]foo", "[a[bc]]x", "(?x)ab cd", "\\Qa.b\\E"] {
+            XCTAssertNil(RegexSupport.requiredLiteral(p), p)
+        }
+        XCTAssertEqual(RegexSupport.requiredLiteral("img_\\d+\\.jpg"), "img_")
+    }
+
+    func testNegatedRegexWithAlternationStaysOneTerm() {
+        let q = Query.parse("!regex:\\.(txt|md)$")
+        XCTAssertEqual(q.groups.count, 1)
+        XCTAssertEqual(q.groups[0].count, 1)
+        let names = makeDeepIndex().search(Query.parse("file: !regex:\\.(txt|md|dylib|plist|jpg)$"),
+                                           options: SearchOptions(limit: 1000)).hits.map(\.name)
+        XCTAssertFalse(names.isEmpty)
+        XCTAssertTrue(names.allSatisfy { Int($0) != nil }, "\(names)") // only the bare-number files remain
+    }
+
+    func testVeryLongPathNeedlesMatchNothingCheaply() {
+        let index = makeDeepIndex()
+        let huge = String(repeating: "x", count: 5000)
+        XCTAssertEqual(index.search(Query.parse("path:" + huge)).total, 0)
+        let medium = "/users/me/" + String(repeating: "y", count: 300)
+        XCTAssertEqual(index.search(Query.parse("path:" + medium)).total, 0)
+    }
+
+    func testOtherLineTerminatorsDoNotSplitNames() {
+        let index = FileIndex()
+        let root = index.addRoot("/t")
+        for name in ["a\rb", "b", "c\u{2028}b", "d\u{85}b"] {
+            index.add(ScannedEntry(name: name, isDirectory: false, size: 0, modified: 0), parent: root)
+        }
+        index.sortIfNeeded(force: true)
+        XCTAssertEqual(index.search(Query.parse("regex:^b")).hits.map(\.name), ["b"])
     }
 }

@@ -57,7 +57,7 @@ public struct Query {
                 continue
             }
             // "|" separates alternatives, except inside a regex: term, where it is alternation.
-            if !inQuotes && ch == "|" && !current.lowercased().hasPrefix("regex:") {
+            if !inQuotes && ch == "|" && !current.lowercased().drop(while: { $0 == "!" }).hasPrefix("regex:") {
                 if !current.isEmpty { tokens.append(current); current = "" }
                 tokens.append("|")
                 continue
