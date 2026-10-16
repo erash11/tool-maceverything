@@ -271,6 +271,19 @@ final class MacTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url), "existing index")
     }
 
+    func testScanReportsProgress() {
+        let index = FileIndex()
+        let root = index.addRoot(dir)
+        var seen: [Int] = []
+        let lock = NSLock()
+        let stats = Scanner().scanTree(into: index, root: root, rootPath: dir) { n in
+            lock.lock(); seen.append(n); lock.unlock()
+        }
+        XCTAssertFalse(seen.isEmpty)
+        XCTAssertEqual(seen.max(), stats.entries)
+        XCTAssertNil(IndexService(roots: [dir]).status().scannedSoFar, "no progress when not scanning")
+    }
+
     func testConcurrentRescansAreSerialized() {
         let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-rescan.bin"))
         service.start()

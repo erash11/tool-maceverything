@@ -151,11 +151,18 @@ public struct Scanner {
             var results = [[ScannedEntry]?](repeating: nil, count: level.count)
             let lock = NSLock()
             let current = level
+            let listedBefore = stats.entries
+            var listedNow = 0
             DispatchQueue.concurrentPerform(iterations: current.count) { i in
                 let listed = list(current[i].path)
                 lock.lock()
                 results[i] = listed
+                listedNow += listed?.count ?? 0
+                let soFar = listedBefore + listedNow
                 lock.unlock()
+                // Report as folders are listed, not once per tree level: a level can hold
+                // hundreds of thousands of folders and take many seconds.
+                progress?(soFar)
             }
             var next: [(path: String, id: Int32)] = []
             for (i, dir) in current.enumerated() {
@@ -173,7 +180,6 @@ public struct Scanner {
                     }
                 }
             }
-            progress?(stats.entries)
             level = next
         }
         stats.seconds = Date().timeIntervalSince(started)

@@ -34,6 +34,9 @@ public struct IPCStatus: Codable {
     public var memoryBytes: Int?
     /// Roots whose change stream is not running; their results may be stale.
     public var unwatchedRoots: [String]?
+    /// While a scan runs: the root being scanned and entries found so far in this scan.
+    public var scanningRoot: String?
+    public var scannedSoFar: Int?
 }
 
 public struct IPCResponse: Codable {

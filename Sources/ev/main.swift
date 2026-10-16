@@ -176,6 +176,10 @@ case "--status":
         let r = try IPC.send(IPCRequest(command: "status"))
         guard let s = r.status else { fail(r.error ?? "no status") }
         print("ready: \(s.ready)  scanning: \(s.scanning)")
+        if s.scanning, let soFar = s.scannedSoFar {
+            let root = s.scanningRoot.map { " in \($0)" } ?? ""
+            print("scan progress: \(soFar.formatted()) entries so far\(root)")
+        }
         print("entries: \(s.entries)")
         print("roots: \(s.roots.joined(separator: ", "))")
         if let secs = s.lastScanSeconds { print(String(format: "last full scan: %.1f s", secs)) }

@@ -31,6 +31,8 @@ public final class IndexService {
     /// Guards the status fields below, which are read by request handlers on other threads.
     private let stateLock = NSLock()
     private var _scanning = false
+    private var _scanningRoot: String?
+    private var _scannedSoFar = 0
     private var _ready = false
     private var _lastScanSeconds: Double?
     private var _unwatchedRoots: [String] = []
@@ -118,7 +120,11 @@ public final class IndexService {
         lifecycle.lock()
         if let loaded = loadIndex() {
             index.replace(with: loaded)
-            locked { _ready = true }
+            locked {
+                _ready = true
+                _scanning = false
+                _scanningRoot = nil
+            }
             log("loaded \(loaded.liveCount) entries from \(indexURL.path)")
             work.sync { appliedEventIds = loaded.volumeState.mapValues(\.lastEventId) }
             startWatchers(since: loaded.volumeState)
@@ -182,13 +188,24 @@ public final class IndexService {
 
     /// Scans `list` into `target`, recording each root's cursor before any scanning starts.
     private func scanRoots(_ list: [String], into target: FileIndex) {
+        locked {
+            _scanning = true
+            _scannedSoFar = 0
+        }
         var since: [String: UInt64] = [:]
         for root in list { since[root] = Watcher.currentEventId(for: root) }
         for root in list {
             let mtime = (try? FileManager.default.attributesOfItem(atPath: root)[.modificationDate] as? Date)
                 .map { Int64($0.timeIntervalSince1970) } ?? 0
             let id = target.addRoot(root, modified: mtime)
-            let stats = scanner.scanTree(into: target, root: id, rootPath: root)
+            let base = locked { () -> Int in
+                _scanningRoot = root
+                return _scannedSoFar
+            }
+            let stats = scanner.scanTree(into: target, root: id, rootPath: root) { [weak self] n in
+                self?.locked { self?._scannedSoFar = base + n }
+            }
+            locked { _scannedSoFar = base + stats.entries }
             log("scanned \(root): \(stats.entries) entries, \(stats.unreadable) unreadable folders, "
                 + String(format: "%.1f s", stats.seconds))
             target.volumeState[root] = .init(volumeUUID: Watcher.volumeUUID(for: root) ?? "",
@@ -224,6 +241,7 @@ public final class IndexService {
         locked {
             _lastScanSeconds = elapsed
             _scanning = false
+            _scanningRoot = nil
             _ready = true
         }
         dirty = true
@@ -450,7 +468,11 @@ public final class IndexService {
         switch request.command {
         case "search":
             guard ready else {
-                return IPCResponse(ok: false, error: "the index is still being built; try again shortly",
+                let progress = locked { _scannedSoFar }
+                let text = progress > 0
+                    ? "the index is still being built (\(progress.formatted()) entries so far); try again shortly"
+                    : "the index is still being built; try again shortly"
+                return IPCResponse(ok: false, error: text,
                                    status: status())
             }
             let query = Query.parse(request.query ?? "")
@@ -483,7 +505,9 @@ public final class IndexService {
     public func status() -> IPCStatus {
         IPCStatus(ready: ready, entries: index.read { $0.liveCount }, roots: roots, scanning: scanning,
                   lastScanSeconds: lastScanSeconds, memoryBytes: IndexService.residentBytes(),
-                  unwatchedRoots: unwatchedRoots)
+                  unwatchedRoots: unwatchedRoots,
+                  scanningRoot: locked { _scanning ? _scanningRoot : nil },
+                  scannedSoFar: locked { _scanning ? _scannedSoFar : nil })
     }
 
     public static func residentBytes() -> Int? {
