@@ -134,6 +134,25 @@ final class MacTests: XCTestCase {
         XCTAssertNotNil(index.lookup(dir + "/a/late.txt"))
     }
 
+    func testBrowserCachesAreSkippedByName() throws {
+        let cache = dir + "/a/Cache/Cache_Data"
+        try FileManager.default.createDirectory(atPath: cache, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: cache + "/f_000001", contents: nil)
+        let index = FileIndex()
+        let root = index.addRoot(dir)
+        Scanner().scanTree(into: index, root: root, rootPath: dir)
+        XCTAssertNotNil(index.lookup(cache), "the cache folder itself is still listed")
+        XCTAssertNil(index.lookup(cache + "/f_000001"), "its contents are not")
+        XCTAssertTrue(Scanner().refresh(index, dir: root, path: dir, recursive: true))
+        XCTAssertNil(index.lookup(cache + "/f_000001"), "a refresh does not walk into it either")
+        let all = FileIndex()
+        Scanner(excludedNames: []).scanTree(into: all, root: all.addRoot(dir), rootPath: dir)
+        XCTAssertNotNil(all.lookup(cache + "/f_000001"), "an empty name list indexes caches again")
+        let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-names.bin"))
+        XCTAssertTrue(service.isExcluded(cache + "/f_000002"))
+        XCTAssertFalse(service.isExcluded(dir + "/a/Cache"))
+    }
+
     func testDeletedRootIsEmptied() throws {
         let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-root.bin"))
         service.start()
@@ -263,7 +282,7 @@ final class MacTests: XCTestCase {
         let viaSearch = FileIndex()
         SearchFS.buildTree(found.entries, volumePath: volume, into: viaSearch, root: viaSearch.addRoot(volume))
         let viaWalk = FileIndex()
-        Scanner(exclusions: []).scanTree(into: viaWalk, root: viaWalk.addRoot(volume), rootPath: volume)
+        Scanner(exclusions: [], excludedNames: []).scanTree(into: viaWalk, root: viaWalk.addRoot(volume), rootPath: volume)
 
         func describe(_ index: FileIndex) -> Set<String> {
             Set((0..<Int32(index.records.count)).compactMap { id -> String? in

@@ -60,6 +60,10 @@ Optional `~/Library/Application Support/MacEverything/config.json`:
 { "roots": ["/", "/Volumes/Work"], "exclusions": ["/Users/me/node_modules"], "includeExternalVolumes": true }
 ```
 
+Browser and Electron app caches (folders named `Cache_Data`, `Code Cache`, `GPUCache`,
+`DawnGraphiteCache`, `DawnWebGPUCache`, `cache2`) are listed but not walked into.
+`"excludedNames": [...]` replaces that list; `[]` indexes them again.
+
 ## Develop
 
 `swift build`, `swift test`, `.build/debug/ev --bench ~/Documents`. Design notes: `docs/DESIGN.md`.

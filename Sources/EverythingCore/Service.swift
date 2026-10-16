@@ -6,11 +6,16 @@ import Darwin
 public struct ServiceConfig: Codable {
     public var roots: [String]?
     public var exclusions: [String]?
+    /// Folder names to skip anywhere. Replaces `Scanner.defaultExcludedNames` when set,
+    /// so `[]` indexes browser caches again.
+    public var excludedNames: [String]?
     public var includeExternalVolumes: Bool?
 
-    public init(roots: [String]? = nil, exclusions: [String]? = nil, includeExternalVolumes: Bool? = nil) {
+    public init(roots: [String]? = nil, exclusions: [String]? = nil, excludedNames: [String]? = nil,
+                includeExternalVolumes: Bool? = nil) {
         self.roots = roots
         self.exclusions = exclusions
+        self.excludedNames = excludedNames
         self.includeExternalVolumes = includeExternalVolumes
     }
 
@@ -70,10 +75,12 @@ public final class IndexService {
     private let log: (String) -> Void
 
     public init(roots: [String], indexURL: URL = FileIndex.defaultIndexURL,
-                exclusions: Set<String> = Scanner.defaultExclusions, log: @escaping (String) -> Void = { _ in }) {
+                exclusions: Set<String> = Scanner.defaultExclusions,
+                excludedNames: Set<String> = Scanner.defaultExcludedNames,
+                log: @escaping (String) -> Void = { _ in }) {
         self.roots = IndexService.normalizeRoots(roots, exclusions: exclusions)
         self.indexURL = indexURL
-        self.scanner = Scanner(exclusions: exclusions)
+        self.scanner = Scanner(exclusions: exclusions, excludedNames: excludedNames)
         self.log = log
     }
 
@@ -342,6 +349,14 @@ public final class IndexService {
             // Roots inside an excluded folder (for example /Volumes/Work) are still watched.
             if roots.contains(where: { $0 != "/" && (path == $0 || path.hasPrefix($0 + "/")) }) { return false }
             return true
+        }
+        // Inside a folder skipped by name (a browser cache): its contents are never indexed.
+        if !scanner.excludedNames.isEmpty {
+            let root = rootFor(path)
+            let below = root == "/" ? path : String(path.dropFirst(root.count))
+            if below.split(separator: "/").contains(where: { scanner.excludedNames.contains(String($0)) }) {
+                return true
+            }
         }
         return false
     }

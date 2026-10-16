@@ -12,12 +12,27 @@ public struct Scanner {
         "/.vol", "/net", "/home", "/cores", "/.Spotlight-V100", "/.fseventsd", "/.DocumentRevisions-V100",
     ]
 
+    /// Folder names never descended into, wherever they are: browser and Electron app caches.
+    /// They hold hundreds of thousands of hashed file names nobody searches for, cost the most
+    /// time in a scan (Chrome's cache took 17 to 48 s), and change constantly.
+    public static let defaultExcludedNames: Set<String> = [
+        "Cache_Data", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "cache2",
+    ]
+
     public var exclusions: Set<String>
+    public var excludedNames: Set<String>
     public var useBulk: Bool
 
-    public init(exclusions: Set<String> = Scanner.defaultExclusions, useBulk: Bool = true) {
+    public init(exclusions: Set<String> = Scanner.defaultExclusions,
+                excludedNames: Set<String> = Scanner.defaultExcludedNames, useBulk: Bool = true) {
         self.exclusions = exclusions
+        self.excludedNames = excludedNames
         self.useBulk = useBulk
+    }
+
+    /// Whether the walk skips the folder at `path` (whose last component is `name`).
+    public func skips(_ path: String, name: String) -> Bool {
+        exclusions.contains(path) || excludedNames.contains(name)
     }
 
     /// Lists one directory's direct children. Returns nil if it cannot be opened.
@@ -210,7 +225,7 @@ public struct Scanner {
                     stats.entries += 1
                     if entry.isDirectory {
                         let childPath = dir.path == "/" ? "/" + entry.name : dir.path + "/" + entry.name
-                        if !exclusions.contains(childPath) { next.append((childPath, id)) }
+                        if !skips(childPath, name: entry.name) { next.append((childPath, id)) }
                     }
                 }
             }
@@ -287,8 +302,9 @@ public struct Scanner {
                 var out: [(String, Int32, Bool)] = []
                 for kid in index.childIds(of: id) where index.records[Int(kid)].isDirectory {
                     guard deep || newDirs.contains(kid) else { continue }
-                    let kidPath = p == "/" ? "/" + index.name(of: kid) : p + "/" + index.name(of: kid)
-                    if exclusions.contains(kidPath) { continue }
+                    let kidName = index.name(of: kid)
+                    let kidPath = p == "/" ? "/" + kidName : p + "/" + kidName
+                    if skips(kidPath, name: kidName) { continue }
                     out.append((kidPath, kid, true))
                 }
                 return out

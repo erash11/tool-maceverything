@@ -13,7 +13,8 @@ for extra in config.exclusions ?? [] { exclusions.insert(IndexService.canonical(
 
 signal(SIGPIPE, SIG_IGN)
 logLine("everythingd starting; roots: \(roots.joined(separator: ", "))")
-let service = IndexService(roots: roots, exclusions: exclusions, log: logLine)
+let excludedNames = config.excludedNames.map(Set.init) ?? Scanner.defaultExcludedNames
+let service = IndexService(roots: roots, exclusions: exclusions, excludedNames: excludedNames, log: logLine)
 let server = IPCServer { service.handle($0) }
 do {
     try server.start()

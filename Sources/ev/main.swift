@@ -157,7 +157,7 @@ func runSearchFSBench(_ volume: String) {
 
     let viaWalk = FileIndex()
     let walkRoot = viaWalk.addRoot(volume)
-    let stats = Scanner(exclusions: []).scanTree(into: viaWalk, root: walkRoot, rootPath: volume)
+    let stats = Scanner(exclusions: [], excludedNames: []).scanTree(into: viaWalk, root: walkRoot, rootPath: volume)
     print(String(format: "  getattrlistbulk walk: %ld entries, %ld unreadable folders, %.2f s",
                  stats.entries, stats.unreadable, stats.seconds))
 
