@@ -12,7 +12,8 @@ menu (Everything's filters), "Show temp files" toggle (temp hidden by default), 
 right-click column chooser, drag to reorder, default columns Name | Type | Path.
 Scope menu also lists each cloud account (Google Drive, OneDrive, Dropbox, Box per
 ~/Library/CloudStorage folder, plus iCloud Drive) under Cloud, added 2026-10-16: built and
-query-checked on the Mac with `ev`, window not yet seen.
+query-checked on the Mac with `ev`, window not yet seen. Detail:
+`docs/handoffs/2026-10-16-cloud-account-scopes.md`.
 
 | Measured on CI, 1.35M entries | Result |
 | --- | --- |
@@ -22,11 +23,13 @@ query-checked on the Mac with `ev`, window not yet seen.
 | `report !temp:` (first search, builds the mask) | 43 ms; later searches only extend it |
 
 ## Next
-1. On the Mac: Locations window (menu bar > Locations…), live updates (create, rename, delete a
+1. Run `bash scripts/install.sh` in `~/DEV/MacEverything`, open the search window, and pick
+   "Google Drive (eric.rash11@gmail.com)" in the scope menu to confirm the per-account scopes.
+2. On the Mac: Locations window (menu bar > Locations…), live updates (create, rename, delete a
    file and check `ev`), unplug and replug CRASHBOX. Rest of the #2 checklist.
-2. Post the real-Mac numbers on #3 and close it (GitHub MCP was down at the end of 2026-10-16).
-3. Delete the `codex-review` and `codex-review-base` branches on GitHub, close #10.
-4. Optional: OneDrive folders that each take exactly 6.0 s to list; Type column sorting.
+3. Post the real-Mac numbers on #3 and close it (GitHub MCP was down at the end of 2026-10-16).
+4. Delete the `codex-review` and `codex-review-base` branches on GitHub, close #10.
+5. Optional: OneDrive folders that each take exactly 6.0 s to list; Type column sorting.
 
 ## Open questions
 - None. #9 decided 2026-10-16: keep building (see `docs/DECISIONS.md`).
