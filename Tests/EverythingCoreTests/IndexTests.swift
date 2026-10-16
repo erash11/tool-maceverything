@@ -324,7 +324,7 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(filtered("", .video), ["game1.mp4"])
         XCTAssertEqual(filtered("", .document), ["notes.txt", "q1 report.pdf", "Q2 Report.docx"])
         XCTAssertEqual(filtered("report", .document), ["q1 report.pdf", "Q2 Report.docx"])
-        XCTAssertEqual(filtered("", .folder), ["film", "Reports"])
+        XCTAssertEqual(filtered("", .folder), ["/data", "film", "Reports"]) // the root is a folder too
         XCTAssertEqual(filtered("", .audio), [])
         XCTAssertEqual(names(index, "!video: film/"), ["notes.txt"])
         XCTAssertEqual(names(index, "VIDEO:"), ["game1.mp4"])
