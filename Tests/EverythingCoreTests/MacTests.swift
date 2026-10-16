@@ -113,6 +113,9 @@ final class MacTests: XCTestCase {
         let b = index.lookup(dir + "/a/b")!
         chmod(dir + "/a/b", 0)
         defer { chmod(dir + "/a/b", 0o755) }
+        var code: Int32 = 0
+        XCTAssertNil(Scanner.listBulk(dir + "/a/b", error: &code))
+        XCTAssertEqual(code, EACCES)
         // Permission denied is final, not a temporary failure: handled (no retry), entries kept.
         XCTAssertTrue(Scanner().refresh(index, dir: b, path: dir + "/a/b", recursive: false))
         XCTAssertNotNil(index.lookup(dir + "/a/b/two.PDF"), "an unreadable folder must not lose its entries")

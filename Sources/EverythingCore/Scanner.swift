@@ -22,15 +22,36 @@ public struct Scanner {
 
     /// Lists one directory's direct children. Returns nil if it cannot be opened.
     public func list(_ path: String) -> [ScannedEntry]? {
+        var code: Int32 = 0
+        return list(path, error: &code)
+    }
+
+    /// Lists one directory; on failure returns nil and sets `error` to the errno that stopped it.
+    public func list(_ path: String, error: inout Int32) -> [ScannedEntry]? {
         #if canImport(Darwin)
-        if useBulk { return Scanner.listBulk(path) }
+        if useBulk { return Scanner.listBulk(path, error: &error) }
         #endif
-        return Scanner.listFoundation(path)
+        return Scanner.listFoundation(path, error: &error)
     }
 
     public static func listFoundation(_ path: String) -> [ScannedEntry]? {
+        var code: Int32 = 0
+        return listFoundation(path, error: &code)
+    }
+
+    public static func listFoundation(_ path: String, error: inout Int32) -> [ScannedEntry]? {
         let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: path) else { return nil }
+        let names: [String]
+        do { names = try fm.contentsOfDirectory(atPath: path) } catch let caught {
+            let failure = caught as NSError
+            let underlying = failure.userInfo[NSUnderlyingErrorKey] as? NSError
+            if underlying?.domain == NSPOSIXErrorDomain {
+                error = Int32(underlying!.code)
+            } else {
+                error = failure.code == NSFileReadNoPermissionError ? EACCES : EIO
+            }
+            return nil
+        }
         var out: [ScannedEntry] = []
         out.reserveCapacity(names.count)
         for name in names {
@@ -61,8 +82,13 @@ public struct Scanner {
     /// Lists a directory with getattrlistbulk(2): one system call returns many entries with
     /// name, type, modification time and size, instead of a stat() per file.
     public static func listBulk(_ path: String) -> [ScannedEntry]? {
+        var code: Int32 = 0
+        return listBulk(path, error: &code)
+    }
+
+    public static func listBulk(_ path: String, error: inout Int32) -> [ScannedEntry]? {
         let fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-        if fd < 0 { return nil }
+        if fd < 0 { error = errno; return nil }
         defer { close(fd) }
 
         var attrs = attrlist()
@@ -81,7 +107,7 @@ public struct Scanner {
             }
             // A failure after some entries means the listing is incomplete. Callers treat a
             // listing as the whole folder, so a partial one would delete the missing entries.
-            if count < 0 { return nil }
+            if count < 0 { error = errno; return nil }
             if count == 0 { break }
             var entry = UnsafeRawPointer(buffer)
             for _ in 0..<Int(count) {
@@ -216,12 +242,15 @@ public struct Scanner {
         var complete = true
         var queue: [(String, Int32, Bool)] = [(path, dir, recursive)]
         while let (p, id, deep) = queue.popLast() {
-            let entries = list(p)
+            var code: Int32 = 0
+            let entries = list(p, error: &code)
             let gone = entries == nil && !FileManager.default.fileExists(atPath: p)
             // Permission denied is not temporary (for example root-only system folders such as
-            // /private/var/db/locationd, unreadable even with Full Disk Access): keep what the
-            // index has and treat the change as handled, instead of retrying it.
-            let denied = entries == nil && !gone && access(p, R_OK | X_OK) != 0
+            // /private/var/db/locationd, or folders macOS privacy protection blocks even when
+            // access() says yes): keep what the index has and treat the change as handled,
+            // instead of retrying it.
+            let denied = entries == nil && !gone
+                && (code == EACCES || code == EPERM || access(p, R_OK | X_OK) != 0)
             let next: [(String, Int32, Bool)] = shared.write { index in
                 if index.records[Int(id)].isDeleted { return [] }
                 guard let entries else {
