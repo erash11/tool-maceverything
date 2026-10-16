@@ -172,12 +172,22 @@ public final class IndexService {
         for root in roots {
             // Ids from a per-host stream mean nothing to a per-device one and vice versa.
             let perDevice = Watcher(root: root) { _ in }.isPerDevice
-            let valid = loaded.volumeState[root].map {
-                $0.volumeUUID == (Watcher.volumeUUID(for: root) ?? "")
-                    && ($0.perDevice ?? false) == perDevice
-                    && $0.lastEventId <= Watcher.currentEventId(for: root)
-            } ?? false
-            if valid, loaded.lookup(root) != nil { continue }
+            var reason: String?
+            if let state = loaded.volumeState[root] {
+                let uuid = Watcher.volumeUUID(for: root) ?? "", current = Watcher.currentEventId(for: root)
+                if state.volumeUUID != uuid {
+                    reason = "volume id changed (\(state.volumeUUID) to \(uuid))"
+                } else if (state.perDevice ?? false) != perDevice {
+                    reason = "change stream type changed"
+                } else if state.lastEventId > current {
+                    reason = "saved event id \(state.lastEventId) is ahead of the volume's \(current)"
+                }
+            } else {
+                reason = "no saved state"
+            }
+            if reason == nil && loaded.lookup(root) == nil { reason = "root missing from the index" }
+            guard let reason else { continue }
+            log("\(root) needs a rescan: \(reason)")
             if let id = loaded.lookup(root), loaded.records[Int(id)].parent < 0 { loaded.remove(id) }
             stale.append(root)
         }
