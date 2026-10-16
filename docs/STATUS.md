@@ -23,6 +23,10 @@ skipped when a rescan already ran, browser caches skipped by folder name.
 
 Search window has a scope menu (All, This Mac, Cloud, each drive) and `drive:NAME`; confirmed on
 the Mac 2026-10-16. The window reruns its search on open and retries while the daemon restarts.
+Also built 2026-10-16, CI green, not yet confirmed on the Mac: file-type menu and keywords
+(`audio:` `zip:` `doc:` `exe:` `pic:` `video:`), Locations window (add folders, drives, network
+shares as config.json `extraRoots`; daemon reloads for new drives within 30 s), and temp-file
+hiding (`!temp:`, "Show temp files" toggle, mask extended incrementally).
 
 | Measured on CI, 1.35M entries | Result | Target |
 | --- | --- | --- |
