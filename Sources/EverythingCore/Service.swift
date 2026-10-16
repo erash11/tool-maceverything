@@ -185,7 +185,11 @@ public final class IndexService {
             var reason: String?
             if let state = loaded.volumeState[root] {
                 let uuid = Watcher.volumeUUID(for: root) ?? "", current = Watcher.currentEventId(for: root)
-                if state.volumeUUID != uuid {
+                if perDevice && current == 0 {
+                    // No FSEvents history on this volume (for example exFAT, or a drive used
+                    // on another computer): changes made while we were not running are unknown.
+                    reason = "the volume keeps no change history"
+                } else if state.volumeUUID != uuid {
                     reason = "volume id changed (\(state.volumeUUID) to \(uuid))"
                 } else if (state.perDevice ?? false) != perDevice {
                     reason = "change stream type changed"
