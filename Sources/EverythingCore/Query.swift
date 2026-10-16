@@ -23,7 +23,8 @@ public struct Query {
     public var isEmpty: Bool { groups.isEmpty }
 
     /// Parses Everything-style syntax: `foo bar`, `"exact phrase"`, `a | b`, `!skip`, `*.pdf`,
-    /// `ext:pdf;docx`, `path:Football`, `size:>1gb`, `dm:today`, `regex:^IMG_\d+`, `file:`, `folder:`.
+    /// `ext:pdf;docx`, `path:Football`, `drive:Work`, `size:>1gb`, `dm:today`, `regex:^IMG_\d+`,
+    /// `file:`, `folder:`.
     public static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> Query {
         var groups: [[Term]] = []
         var joinNext = false
@@ -83,6 +84,11 @@ public struct Query {
         if lower.hasPrefix("ext:") {
             let exts = lower.dropFirst(4).split(separator: ";").map { Array(("." + $0).utf8) }
             return exts.isEmpty ? nil : .ext(exts, negated: negated)
+        }
+        if lower.hasPrefix("drive:") {
+            // drive:CRASHBOX means everything under /Volumes/CRASHBOX.
+            let name = lower.dropFirst(6).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return name.isEmpty ? nil : .pathContains(Array("/volumes/\(name)/".utf8), negated: negated)
         }
         if lower.hasPrefix("path:") {
             let value = String(lower.dropFirst(5))

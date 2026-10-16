@@ -23,6 +23,7 @@ struct EverythingApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: NSPanel?
+    private let model = SearchModel()
     private var hotKey: HotKey?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -50,10 +51,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             p.level = .floating
             p.hidesOnDeactivate = false
             p.isReleasedWhenClosed = false
-            p.contentView = NSHostingView(rootView: SearchView())
+            p.contentView = NSHostingView(rootView: SearchView(model: model))
             p.center()
             panel = p
         }
+        model.refreshScopes()
         NSApp.activate(ignoringOtherApps: true)
         panel?.makeKeyAndOrderFront(nil)
     }
@@ -90,16 +92,51 @@ final class SearchModel: ObservableObject {
     @Published var message = ""
     @Published var sort = SortKey.name { didSet { run() } }
     @Published var descending = false { didSet { run() } }
+    /// What the scope menu offers: All, This Mac, Cloud, then each indexed drive.
+    @Published var scopes: [SearchScope] = [.all]
+    @Published var scope = SearchScope.all {
+        didSet {
+            // A fallback while a saved drive is unplugged must not forget that choice.
+            if !restoring { UserDefaults.standard.set(scope.id, forKey: SearchModel.scopeKey) }
+            run()
+        }
+    }
+    private var restoring = false
 
+    private static let scopeKey = "searchScope"
     private let queue = DispatchQueue(label: "MacEverything.app.search")
     private var generation = 0
 
-    init() { run() }
+    init() {
+        refreshScopes()
+        run()
+    }
+
+    /// Rebuilds the scope menu from the daemon's roots, so a drive plugged in or out shows up
+    /// the next time the window opens. Restores the last choice when it is still offered.
+    func refreshScopes() {
+        queue.async {
+            let roots = (try? IPC.send(IPCRequest(command: "status")))?.status?.roots ?? []
+            let choices = SearchScope.choices(roots: roots)
+            DispatchQueue.main.async {
+                self.scopes = choices
+                let saved = UserDefaults.standard.string(forKey: SearchModel.scopeKey).flatMap(SearchScope.init(id:))
+                let wanted = saved ?? self.scope
+                let next = choices.contains(wanted) ? wanted : .all
+                if next != self.scope {
+                    self.restoring = true
+                    self.scope = next
+                    self.restoring = false
+                }
+            }
+        }
+    }
 
     func run() {
         generation += 1
         let gen = generation
-        let request = IPCRequest(command: "search", query: query, limit: 500, sort: sort, descending: descending)
+        let request = IPCRequest(command: "search", query: query, limit: 500, sort: sort, descending: descending,
+                                 scope: scope.query)
         queue.async {
             let text: String
             var newHits: [SearchHit] = []
@@ -124,7 +161,7 @@ final class SearchModel: ObservableObject {
 }
 
 struct SearchView: View {
-    @StateObject private var model = SearchModel()
+    @ObservedObject var model: SearchModel
     @State private var selection = Set<String>()
     @FocusState private var fieldFocused: Bool
 
@@ -137,12 +174,23 @@ struct SearchView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TextField("Search", text: $model.query)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 15))
-                .padding(10)
-                .focused($fieldFocused)
-                .onSubmit { openSelection(reveal: false) }
+            HStack(spacing: 8) {
+                Picker("Scope", selection: $model.scope) {
+                    ForEach(model.scopes, id: \.self) { scope in
+                        Text(scope.title).tag(scope)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+                .help("Limit results to one drive, this Mac, or synced cloud folders")
+                TextField("Search", text: $model.query)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 15))
+                    .focused($fieldFocused)
+                    .onSubmit { openSelection(reveal: false) }
+            }
+            .padding(10)
             Table(model.hits, selection: $selection) {
                 TableColumn("Name") { hit in
                     Label(hit.name, systemImage: hit.isDirectory ? "folder" : "doc")

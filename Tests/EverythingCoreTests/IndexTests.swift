@@ -272,4 +272,47 @@ final class IndexTests: XCTestCase {
         index.sortIfNeeded(force: true)
         XCTAssertEqual(index.search(Query.parse("regex:^b")).hits.map(\.name), ["b"])
     }
+
+    func testScopes() {
+        let index = FileIndex()
+        let mac = index.addRoot("/")
+        let users = index.add(ScannedEntry(name: "Users", isDirectory: true, size: 0, modified: 0), parent: mac)
+        index.add(ScannedEntry(name: "plan.txt", isDirectory: false, size: 1, modified: 0), parent: users)
+        let lib = index.add(ScannedEntry(name: "Library", isDirectory: true, size: 0, modified: 0), parent: users)
+        let cloud = index.add(ScannedEntry(name: "CloudStorage", isDirectory: true, size: 0, modified: 0), parent: lib)
+        index.add(ScannedEntry(name: "plan.docx", isDirectory: false, size: 1, modified: 0), parent: cloud)
+        let work = index.addRoot("/Volumes/Work Disk")
+        index.add(ScannedEntry(name: "plan.mov", isDirectory: false, size: 1, modified: 0), parent: work)
+        index.sortIfNeeded(force: true)
+
+        func scoped(_ q: String, _ scope: SearchScope) -> [String] {
+            index.search(Query.parse(q).and(Query.parse(scope.query)), options: SearchOptions(limit: 100)).hits.map(\.name)
+        }
+        XCTAssertEqual(scoped("plan", .all), ["plan.docx", "plan.mov", "plan.txt"])
+        XCTAssertEqual(scoped("plan", .thisMac), ["plan.docx", "plan.txt"])
+        XCTAssertEqual(scoped("plan", .cloud), ["plan.docx"])
+        XCTAssertEqual(scoped("plan", .drive("/Volumes/Work Disk")), ["plan.mov"])
+        // A typed "|" must not join the scope's group: the scope still applies.
+        XCTAssertEqual(scoped("plan |", .drive("/Volumes/Work Disk")), ["plan.mov"])
+        XCTAssertEqual(names(index, "plan \"drive:work disk\""), ["plan.mov"])
+        XCTAssertEqual(names(index, "plan !drive:work disk"), [])  // "disk" becomes its own word
+        XCTAssertEqual(names(index, "plan !\"drive:Work Disk\""), ["plan.docx", "plan.txt"])
+    }
+
+    func testDriveKeywordAndScopeChoices() {
+        XCTAssertEqual(Query.parse("drive:CRASHBOX").groups, [[.pathContains(Array("/volumes/crashbox/".utf8), negated: false)]])
+        XCTAssertEqual(Query.parse("drive:/Volumes/").groups.count, 1)
+        XCTAssertTrue(Query.parse("drive:").groups.isEmpty)
+
+        let none = SearchScope.choices(roots: ["/", "/Volumes/CRASHBOX"], home: "/h", exists: { _ in false })
+        XCTAssertEqual(none, [.all, .thisMac, .drive("/Volumes/CRASHBOX")])
+        let withCloud = SearchScope.choices(roots: ["/"], home: "/h", exists: { $0 == "/h/Library/CloudStorage" })
+        XCTAssertEqual(withCloud, [.all, .thisMac, .cloud])
+
+        for scope in [SearchScope.all, .thisMac, .cloud, .drive("/Volumes/My Drive")] {
+            XCTAssertEqual(SearchScope(id: scope.id), scope)
+        }
+        XCTAssertNil(SearchScope(id: "drive:"))
+        XCTAssertEqual(SearchScope.drive("/Volumes/CRASHBOX").title, "CRASHBOX")
+    }
 }

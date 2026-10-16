@@ -13,11 +13,15 @@ public struct IPCRequest: Codable {
     public var offset: Int?
     public var sort: SortKey?
     public var descending: Bool?
+    /// Extra query text that results must also match (the search window's scope menu). Parsed
+    /// on its own, so nothing typed in `query` can join it with "|".
+    public var scope: String?
 
     public init(command: String, query: String? = nil, limit: Int? = nil, offset: Int? = nil,
-                sort: SortKey? = nil, descending: Bool? = nil) {
+                sort: SortKey? = nil, descending: Bool? = nil, scope: String? = nil) {
         self.command = command
         self.query = query
+        self.scope = scope
         self.limit = limit
         self.offset = offset
         self.sort = sort

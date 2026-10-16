@@ -13,6 +13,7 @@ query syntax:
   a | b             either word                      !word   exclude
   *.pdf  game?.mp4  wildcards on the whole name       ext:pdf;docx
   path:Football     word anywhere in the full path   size:>1gb  size:<10kb
+  drive:CRASHBOX    only that drive                  !path:/Volumes/   only this Mac
   dm:today  dm:yesterday  dm:thisweek  dm:>2026-10-01
   regex:^IMG_\\d+    file:  folder:
 

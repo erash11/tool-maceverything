@@ -530,7 +530,7 @@ public final class IndexService {
                 return IPCResponse(ok: false, error: text,
                                    status: status())
             }
-            let query = Query.parse(request.query ?? "")
+            let query = Query.parse(request.query ?? "").and(Query.parse(request.scope ?? ""))
             let options = SearchOptions(limit: request.limit ?? 100, offset: request.offset ?? 0,
                                         sort: request.sort ?? .name, descending: request.descending ?? false)
             let result = index.read { $0.search(query, options: options) }
