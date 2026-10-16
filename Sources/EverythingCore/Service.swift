@@ -181,6 +181,7 @@ public final class IndexService {
         if !stale.isEmpty {
             log("scanning \(stale.joined(separator: ", ")); keeping the rest of the saved index")
             scanRoots(stale, into: loaded)
+            locked { _scanningRoot = nil }
         }
         loaded.sortIfNeeded()
         return loaded
@@ -232,7 +233,10 @@ public final class IndexService {
         let started = Date()
         let fresh = FileIndex()
         scanRoots(roots, into: fresh)
+        locked { _scanningRoot = nil } // every root is listed; status reports the sort
+        let sortStarted = Date()
         fresh.sortIfNeeded(force: true)
+        log("sorted \(fresh.liveCount) names in " + String(format: "%.1f s", Date().timeIntervalSince(sortStarted)))
         let elapsed = Date().timeIntervalSince(started)
         work.sync {
             // Queued changes refer to the old index; the replay from `since` covers them.

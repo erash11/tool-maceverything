@@ -178,8 +178,11 @@ case "--status":
         guard let s = r.status else { fail(r.error ?? "no status") }
         print("ready: \(s.ready)  scanning: \(s.scanning)")
         if s.scanning, let soFar = s.scannedSoFar {
-            let root = s.scanningRoot.map { " in \($0)" } ?? ""
-            print("scan progress: \(soFar.formatted()) entries so far\(root)")
+            if let root = s.scanningRoot {
+                print("scan progress: \(soFar.formatted()) entries so far (all roots), now in \(root)")
+            } else if soFar > 0 {
+                print("scan progress: all \(soFar.formatted()) entries listed; sorting names")
+            }
         }
         print("entries: \(s.entries)")
         print("roots: \(s.roots.joined(separator: ", "))")
