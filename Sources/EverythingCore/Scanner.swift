@@ -218,10 +218,16 @@ public struct Scanner {
         while let (p, id, deep) = queue.popLast() {
             let entries = list(p)
             let gone = entries == nil && !FileManager.default.fileExists(atPath: p)
+            // Permission denied is not temporary (for example root-only system folders such as
+            // /private/var/db/locationd, unreadable even with Full Disk Access): keep what the
+            // index has and treat the change as handled, instead of retrying it.
+            let denied = entries == nil && !gone && access(p, R_OK | X_OK) != 0
             let next: [(String, Int32, Bool)] = shared.write { index in
                 if index.records[Int(id)].isDeleted { return [] }
                 guard let entries else {
-                    if !gone {
+                    if denied {
+                        return []
+                    } else if !gone {
                         complete = false
                     } else if index.records[Int(id)].parent >= 0 {
                         index.remove(id)
