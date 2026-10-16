@@ -2,6 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import EverythingCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 extension SearchHit: Identifiable {
     public var id: String { path }
@@ -216,6 +217,8 @@ struct SearchView: View {
     @State private var selection = Set<String>()
     @State private var sortOrder = [KeyPathComparator(\SearchHit.name)]
     @FocusState private var fieldFocused: Bool
+    /// Which columns are shown, their order and widths (right-click a header; drag to reorder).
+    @AppStorage("resultColumns") private var columnsData = Data()
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -252,27 +255,114 @@ struct SearchView: View {
                 .help("Only show one kind of file, as in Everything's Search menu")
             }
             .padding(10)
-            Table(model.hits, selection: $selection, sortOrder: $sortOrder) {
-                TableColumn("Name", value: \.name) { hit in
-                    Label(hit.name, systemImage: hit.isDirectory ? "folder" : "doc")
-                }
-                TableColumn("Folder", value: \.path) { hit in
-                    Text((hit.path as NSString).deletingLastPathComponent)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                TableColumn("Size", value: \.size) { hit in
-                    Text(hit.isDirectory ? "" : ByteCountFormatter.string(fromByteCount: hit.size, countStyle: .file))
-                        .monospacedDigit()
-                }
-                .width(min: 60, ideal: 80, max: 120)
-                TableColumn("Modified", value: \.modified) { hit in
-                    Text(Self.dateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(hit.modified))))
-                        .monospacedDigit()
-                }
-                .width(min: 110, ideal: 140, max: 180)
+            resultsTable
+            HStack {
+                Text(model.message).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Toggle("Show temp files", isOn: $model.showTemp).toggleStyle(.checkbox)
+                    .help("Temp and generated files: node_modules, .git, build folders, caches, *.tmp, system temp folders")
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+        }
+        .frame(minWidth: 600, minHeight: 320)
+        .onAppear { fieldFocused = true }
+        .onExitCommand { NSApp.keyWindow?.orderOut(nil) }
+        .onCopyCommand {
+            let paths = selection.isEmpty ? [] : Array(selection)
+            return paths.isEmpty ? [] : [NSItemProvider(object: paths.joined(separator: "\n") as NSString)]
+        }
+    }
+
+    // MARK: - Results table
+
+    @available(macOS 14, *)
+    private var columnCustomization: Binding<TableColumnCustomization<SearchHit>> {
+        Binding(
+            get: {
+                (try? JSONDecoder().decode(TableColumnCustomization<SearchHit>.self, from: columnsData))
+                    ?? TableColumnCustomization()
+            },
+            set: { columnsData = (try? JSONEncoder().encode($0)) ?? Data() })
+    }
+
+    @ViewBuilder private var resultsTable: some View {
+        if #available(macOS 14, *) {
+            // Right-click a header to show or hide columns; drag a header to move it.
+            withBehavior(Table(model.hits, selection: $selection, sortOrder: $sortOrder,
+                               columnCustomization: columnCustomization) {
+                TableColumn("Name", value: \.name) { nameCell($0) }
+                    .customizationID("name")
+                    .disabledCustomizationBehavior(.visibility)
+                TableColumn("Folder", value: \.path) { folderCell($0) }
+                    .customizationID("folder")
+                TableColumn("Size", value: \.size) { sizeCell($0) }
+                    .width(min: 60, ideal: 80, max: 120)
+                    .customizationID("size")
+                TableColumn("Modified", value: \.modified) { modifiedCell($0) }
+                    .width(min: 110, ideal: 140, max: 180)
+                    .customizationID("modified")
+                TableColumn("Extension") { hit in Text(Self.fileExtension(hit)) }
+                    .width(min: 50, ideal: 70, max: 120)
+                    .customizationID("extension")
+                    .defaultVisibility(.hidden)
+                TableColumn("Kind") { hit in Text(Self.kind(hit)).foregroundStyle(.secondary).lineLimit(1) }
+                    .width(min: 80, ideal: 140, max: 240)
+                    .customizationID("kind")
+                    .defaultVisibility(.hidden)
+                TableColumn("Path") { hit in
+                    Text(hit.path).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                }
+                .customizationID("path")
+                .defaultVisibility(.hidden)
+            })
+        } else {
+            withBehavior(Table(model.hits, selection: $selection, sortOrder: $sortOrder) {
+                TableColumn("Name", value: \.name) { nameCell($0) }
+                TableColumn("Folder", value: \.path) { folderCell($0) }
+                TableColumn("Size", value: \.size) { sizeCell($0) }
+                    .width(min: 60, ideal: 80, max: 120)
+                TableColumn("Modified", value: \.modified) { modifiedCell($0) }
+                    .width(min: 110, ideal: 140, max: 180)
+            })
+        }
+    }
+
+    private func nameCell(_ hit: SearchHit) -> some View {
+        Label(hit.name, systemImage: hit.isDirectory ? "folder" : "doc")
+    }
+
+    private func folderCell(_ hit: SearchHit) -> some View {
+        Text((hit.path as NSString).deletingLastPathComponent)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+    }
+
+    private func sizeCell(_ hit: SearchHit) -> some View {
+        Text(hit.isDirectory ? "" : ByteCountFormatter.string(fromByteCount: hit.size, countStyle: .file))
+            .monospacedDigit()
+    }
+
+    private func modifiedCell(_ hit: SearchHit) -> some View {
+        Text(Self.dateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(hit.modified))))
+            .monospacedDigit()
+    }
+
+    private static func fileExtension(_ hit: SearchHit) -> String {
+        hit.isDirectory ? "" : (hit.name as NSString).pathExtension.lowercased()
+    }
+
+    private static func kind(_ hit: SearchHit) -> String {
+        let ext = (hit.name as NSString).pathExtension
+        if hit.isDirectory { return ext.isEmpty ? "Folder" : (UTType(filenameExtension: ext)?.localizedDescription ?? "Folder") }
+        if ext.isEmpty { return "Document" }
+        return UTType(filenameExtension: ext)?.localizedDescription ?? ext.uppercased() + " file"
+    }
+
+    /// Sorting from the headers and the row menu, shared by both tables.
+    private func withBehavior<T: View>(_ table: T) -> some View {
+        table
             // Clicking a header sorts by it; clicking again flips the order. The daemon does the
             // sorting, so it covers every match, not only the rows on screen.
             .onChange(of: sortOrder) { order in
@@ -300,22 +390,6 @@ struct SearchView: View {
             } primaryAction: { paths in
                 open(paths, reveal: false)
             }
-            HStack {
-                Text(model.message).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Toggle("Show temp files", isOn: $model.showTemp).toggleStyle(.checkbox)
-                    .help("Temp and generated files: node_modules, .git, build folders, caches, *.tmp, system temp folders")
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-        }
-        .frame(minWidth: 600, minHeight: 320)
-        .onAppear { fieldFocused = true }
-        .onExitCommand { NSApp.keyWindow?.orderOut(nil) }
-        .onCopyCommand {
-            let paths = selection.isEmpty ? [] : Array(selection)
-            return paths.isEmpty ? [] : [NSItemProvider(object: paths.joined(separator: "\n") as NSString)]
-        }
     }
 
     private func openSelection(reveal: Bool) {
