@@ -26,7 +26,9 @@ the Mac 2026-10-16. The window reruns its search on open and retries while the d
 Also built 2026-10-16, CI green, not yet confirmed on the Mac: file-type menu and keywords
 (`audio:` `zip:` `doc:` `exe:` `pic:` `video:`), Locations window (add folders, drives, network
 shares as config.json `extraRoots`; daemon reloads for new drives within 30 s), and temp-file
-hiding (`!temp:`, "Show temp files" toggle, mask extended incrementally).
+hiding (`!temp:`, "Show temp files" toggle, mask extended incrementally). Type menu and temp
+toggle confirmed on the Mac. Results table: header sorting, right-click column chooser, drag to
+reorder, default Name | Type | Path (confirmed on macOS 26.6.2).
 
 | Measured on CI, 1.35M entries | Result | Target |
 | --- | --- | --- |
