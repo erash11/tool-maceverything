@@ -109,7 +109,6 @@ final class SearchModel: ObservableObject {
 
     init() {
         refreshScopes()
-        run()
     }
 
     /// Rebuilds the scope menu from the daemon's roots, so a drive plugged in or out shows up
@@ -125,8 +124,10 @@ final class SearchModel: ObservableObject {
                 let next = choices.contains(wanted) ? wanted : .all
                 if next != self.scope {
                     self.restoring = true
-                    self.scope = next
+                    self.scope = next // runs the search
                     self.restoring = false
+                } else {
+                    self.run() // results and the footer are fresh each time the window opens
                 }
             }
         }
@@ -147,6 +148,13 @@ final class SearchModel: ObservableObject {
                     text = "\(r.total.formatted()) objects  ·  \(String(format: "%.1f", r.milliseconds)) ms"
                 } else {
                     text = response.error ?? "Search failed"
+                }
+            } catch IPCError.notRunning(_) {
+                // Usually the daemon restarting (an install, a login): try again shortly
+                // instead of leaving the error up until the next keystroke.
+                text = "Waiting for the index service to start…"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    if gen == self.generation { self.run() }
                 }
             } catch {
                 text = "\(error)"
