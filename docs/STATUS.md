@@ -1,59 +1,44 @@
 # Status
 
 ## Current state
-v0.1 is complete on `main`: daemon (`everythingd`), CLI (`ev`), menu-bar app, install scripts.
-CI on GitHub's macOS 15 runners is green with 42 tests. Two independent reviews were run:
-Codex (5 passes, 16 findings) and Sonnet (two passes, 15 findings), all fixed. Nothing has run on
-a real Mac yet. Detail: `docs/handoffs/2026-10-16-v0.1-build.md`.
+Running daily on Eric's MacBook (macOS 26.6.2) since 2026-10-16: daemon, `ev` CLI and menu-bar
+app, signed with the local certificate, Full Disk Access on. CI (macOS 15 runners) is the
+compiler and is green on `main`. 4.09M entries indexed (`/` plus the CRASHBOX drive); full scan
+228 to 279 s, scan end to saved index 23 s, startup from the saved index in seconds, daemon
+memory 16 to 30 MB. Detail of the first real-Mac day: `docs/handoffs/2026-10-16-real-mac-and-ui.md`.
 
-Running on Eric's MacBook since 2026-10-16 (signed with the local certificate, Full Disk Access on).
-First real numbers, 4.29M entries (`/` plus the CRASHBOX drive):
+Search window, all confirmed on the Mac: scope menu (All, This Mac, Cloud, each drive), file-type
+menu (Everything's filters), "Show temp files" toggle (temp hidden by default), header sorting,
+right-click column chooser, drag to reorder, default columns Name | Type | Path.
 
-| Measured on the Mac | First try | After fixes |
-| --- | --- | --- |
-| Full scan of `/` | 1,449 s (4.06M entries) | 228 to 279 s (3.87M without browser caches) |
-| Unreadable folders | 535 | 320 (root-only system folders) |
-| Scan end to index saved | 68 min | 23 s (sort 3.7 s) |
-| Startup from the saved index | n/a | a few seconds, no rescan |
-| Daemon memory | n/a | 16 to 30 MB |
-
-Fixes that got there: normal scan priority, permission-denied folders not retried (errno),
-refresh retries only the failed folders, updates paused during a full scan, startup load
-skipped when a rescan already ran, browser caches skipped by folder name.
-
-Search window has a scope menu (All, This Mac, Cloud, each drive) and `drive:NAME`; confirmed on
-the Mac 2026-10-16. The window reruns its search on open and retries while the daemon restarts.
-Also built 2026-10-16, CI green, not yet confirmed on the Mac: file-type menu and keywords
-(`audio:` `zip:` `doc:` `exe:` `pic:` `video:`), Locations window (add folders, drives, network
-shares as config.json `extraRoots`; daemon reloads for new drives within 30 s), and temp-file
-hiding (`!temp:`, "Show temp files" toggle, mask extended incrementally). Type menu and temp
-toggle confirmed on the Mac. Results table: header sorting, right-click column chooser, drag to
-reorder, default Name | Type | Path (confirmed on macOS 26.6.2).
-
-| Measured on CI, 1.35M entries | Result | Target |
-| --- | --- | --- |
-| First scan (getattrlistbulk) | 15 to 22 s (one 58 s outlier) | under 60 s for 2M |
-| Plain, wildcard, ext, size searches | 2 to 15 ms | under 50 ms |
-| `path:` searches | 16 to 30 ms | under 50 ms |
-| `regex:` searches | 6 to 46 ms | under 100 ms |
+| Measured on CI, 1.35M entries | Result |
+| --- | --- |
+| Plain, wildcard, ext, size searches | 2 to 15 ms |
+| `path:` / `regex:` searches | 16 to 30 ms / 6 to 46 ms |
+| `video:`, `doc: report` | 16 to 22 ms |
+| `report !temp:` (first search, builds the mask) | 43 ms; later searches only extend it |
 
 ## Next
-1. Work through the rest of the #2 checklist on the Mac (searches, menu-bar app, Option-Space,
-   live updates, unplugging CRASHBOX).
-2. Record the numbers above on #3 and close it (GitHub MCP was down at the end of the
-   2026-10-16 session). Optional: look at OneDrive folders that each take exactly 6.0 s.
+1. On the Mac: Locations window (menu bar > Locations…), live updates (create, rename, delete a
+   file and check `ev`), unplug and replug CRASHBOX. Rest of the #2 checklist.
+2. Post the real-Mac numbers on #3 and close it (GitHub MCP was down at the end of 2026-10-16).
 3. Delete the `codex-review` and `codex-review-base` branches on GitHub, close #10.
+4. Optional: OneDrive folders that each take exactly 6.0 s to list; Type column sorting.
 
 ## Open questions
 - None. #9 decided 2026-10-16: keep building (see `docs/DECISIONS.md`).
 
 ## Gotchas
-- No Swift toolchain in Claude cloud sessions: CI (`.github/workflows/ci.yml`) is the compiler
-  and test runner. Read job logs with the GitHub MCP `get_job_logs`; `gh run view --log` is blocked.
+- No Swift toolchain in Claude cloud sessions: CI is the compiler. When the GitHub MCP is down,
+  `curl https://api.github.com/repos/erash11/MacEverything/actions/runs` and
+  `.../actions/jobs/<id>/logs` work without auth (public repo).
 - Cloud sessions cannot delete GitHub branches (API and `git push --delete` both refused).
-- Codex code review is at its account usage limit; for another review use a subagent instead.
-- Index writes must stay on `IndexService.work`; `PathTable` relies on parent id < child id.
-  Both were checked by review; keep them true when changing `Service.swift` or `FileIndex.swift`.
+- Index writes must stay on `IndexService.work`; `PathTable` and the temp mask rely on parent id
+  < child id and on records being append-only.
 - External drives with no FSEvents history (CRASHBOX reports event id 0, likely exFAT) are
   rescanned at every daemon start by design (about 15 s for 220K entries).
-- CI benchmark times are noisy (FileManager scan varied 22 to 56 s on the same data).
+- The daemon restarts itself (launchd KeepAlive) when locations change: `ev`/app "reload", or the
+  30 s check finding a new drive. A restart during a full scan waits for the scan to finish.
+- `ev --rescan` right after an install is not needed; the daemon loads its saved index.
+- DexaProject (Google Drive) is indexed by name, per Eric's choice not to exclude anything. Never
+  paste search results from it into chat or an external service.
