@@ -354,4 +354,37 @@ final class IndexTests: XCTestCase {
         try config.save(to: url)
         XCTAssertEqual(ServiceConfig.load(from: url).extraRoots, ["/Volumes/No Such Share"])
     }
+
+    func testTempFiles() {
+        let index = FileIndex()
+        let root = index.addRoot("/")
+        func dir(_ name: String, _ parent: Int32) -> Int32 {
+            index.add(ScannedEntry(name: name, isDirectory: true, size: 0, modified: 0), parent: parent)
+        }
+        func file(_ name: String, _ parent: Int32) {
+            index.add(ScannedEntry(name: name, isDirectory: false, size: 1, modified: 0), parent: parent)
+        }
+        let proj = dir("proj", root)
+        file("report.md", proj)
+        file("report.md.swp", proj)
+        file("~$report.docx", proj)
+        file(".DS_Store", proj)
+        let nm = dir("node_modules", proj)
+        let pkg = dir("report-lib", nm)
+        file("report.js", pkg)
+        let priv = dir("private", root)
+        let tmp = dir("tmp", priv)
+        file("report.txt", tmp)
+        index.sortIfNeeded(force: true)
+
+        XCTAssertEqual(names(index, "report !temp:"), ["report.md"])
+        XCTAssertEqual(names(index, "report temp:"),
+                       ["report-lib", "report.js", "report.md.swp", "report.txt", "~$report.docx"])
+        XCTAssertEqual(names(index, "report").count, 6)
+        // The cached mask follows changes.
+        file("report.tmp", proj)
+        XCTAssertEqual(names(index, "report !temp:"), ["report.md"])
+        file("report2.md", proj)
+        XCTAssertEqual(names(index, "report !temp:"), ["report.md", "report2.md"])
+    }
 }

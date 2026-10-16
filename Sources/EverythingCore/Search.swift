@@ -49,6 +49,7 @@ struct CompiledQuery {
     enum Kind {
         static let contains: UInt8 = 0, path: UInt8 = 1, glob: UInt8 = 2, regex: UInt8 = 3, ext: UInt8 = 4
         static let size: UInt8 = 5, modified: UInt8 = 6, files: UInt8 = 7, folders: UInt8 = 8
+        static let temp: UInt8 = 9
     }
 
     var terms: [Term] = []
@@ -66,6 +67,7 @@ struct CompiledQuery {
     /// Index into `terms` of each path: term; its PathTable is built per scan.
     var pathTerms: [Int] = []
     var hasRegex = false
+    var hasTemp = false
 
     init(_ query: Query) {
         for group in query.groups {
@@ -131,6 +133,9 @@ struct CompiledQuery {
             t.kind = Kind.files
         case .foldersOnly:
             t.kind = Kind.folders
+        case let .temp(neg):
+            t.kind = Kind.temp; t.negated = neg
+            hasTemp = true
         }
         return t
     }
@@ -252,6 +257,7 @@ extension FileIndex {
         let chunkCount = max(1, min(cores * 4, (count + 16_383) / 16_384))
         let chunkSize = (count + chunkCount - 1) / chunkCount
         var partial = [[Int32]](repeating: [], count: chunkCount)
+        let temp = compiled.hasTemp ? tempMask() : []
 
         records.withUnsafeBufferPointer { recs in
         lowerNames.withUnsafeBufferPointer { lower in
@@ -261,6 +267,7 @@ extension FileIndex {
         compiled.slotLength.withUnsafeBufferPointer { slotLength in
         compiled.groupStart.withUnsafeBufferPointer { groupStart in
         compiled.groupCount.withUnsafeBufferPointer { groupCount in
+        temp.withUnsafeBufferPointer { tempMask in
         partial.withUnsafeMutableBufferPointer { out in
             // One table per path: term, built in a single pass before the parallel scan.
             let tables = compiled.pathTerms.map { k in
@@ -271,7 +278,7 @@ extension FileIndex {
             let ctx = MatchContext(recs: recs, lower: lower, terms: terms, qbytes: qbytes,
                                    slotStart: slotStart, slotLength: slotLength,
                                    groupStart: groupStart, groupCount: groupCount,
-                                   regexes: compiled.regexes, pathViews: pathViews)
+                                   regexes: compiled.regexes, pathViews: pathViews, temp: tempMask)
             DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
                 let lo = chunk * chunkSize
                 let hi = min(lo + chunkSize, count)
@@ -289,7 +296,7 @@ extension FileIndex {
                     for id in lo..<hi {
                         let r = recs[id]
                         if r.flags & 2 != 0 { continue }
-                        if ctx.matches(r, local: id - lo, chunkLength: hi - lo, regexHits: hits) {
+                        if ctx.matches(r, id: id, local: id - lo, chunkLength: hi - lo, regexHits: hits) {
                             found.append(Int32(id))
                         }
                     }
@@ -298,7 +305,7 @@ extension FileIndex {
             }
             }
             withExtendedLifetime(tables) {}
-        }}}}}}}}}
+        }}}}}}}}}}
         return partial.flatMap { $0 }
     }
 }
@@ -315,6 +322,8 @@ struct MatchContext {
     let groupCount: UnsafeBufferPointer<Int>
     let regexes: [NSRegularExpression?]
     let pathViews: UnsafeBufferPointer<PathTable.View>
+    /// tempMask() for queries with temp:, else empty.
+    let temp: UnsafeBufferPointer<UInt8>
 
     @inline(__always)
     func compare(_ v: Int64, _ cmp: UInt8, _ target: Int64) -> Bool {
@@ -327,7 +336,7 @@ struct MatchContext {
         }
     }
 
-    func matches(_ r: Record, local: Int, chunkLength: Int, regexHits: UnsafeBufferPointer<Int8>) -> Bool {
+    func matches(_ r: Record, id: Int, local: Int, chunkLength: Int, regexHits: UnsafeBufferPointer<Int8>) -> Bool {
         let start = Int(r.lowerStart), len = Int(r.lowerLength)
         let groups = groupStart.count
         var g = 0
@@ -377,6 +386,8 @@ struct MatchContext {
                     }
                 case CompiledQuery.Kind.files:
                     hit = r.flags & 1 == 0
+                case CompiledQuery.Kind.temp:
+                    hit = temp[id] != 0
                 default:
                     hit = r.flags & 1 != 0
                 }

@@ -15,6 +15,7 @@ query syntax:
   path:Football     word anywhere in the full path   size:>1gb  size:<10kb
   drive:CRASHBOX    only that drive                  !path:/Volumes/   only this Mac
   audio: zip: doc: exe: pic: video:                  file types, as in Everything's filters
+  !temp:            hide temp and generated files (node_modules, .git, caches, *.tmp)
   dm:today  dm:yesterday  dm:thisweek  dm:>2026-10-01
   regex:^IMG_\\d+    file:  folder:
 
@@ -135,7 +136,7 @@ func runBench(_ folder: String) {
     index.sortIfNeeded(force: true)
     print(String(format: "  sort by name: %.2f s", Date().timeIntervalSince(t0)))
     for q in ["a", "report", "*.pdf", "ext:jpg;png", "path:lib", "path:contents/resources", "size:>10mb",
-              "regex:^[0-9]+$", "regex:\\.plist$", "regex:^lib.*\\.dylib$", "video:", "doc: report", "zzzzqqq"] {
+              "regex:^[0-9]+$", "regex:\\.plist$", "regex:^lib.*\\.dylib$", "video:", "doc: report", "report !temp:", "zzzzqqq"] {
         let r = index.search(Query.parse(q), options: SearchOptions(limit: 100))
         print(String(format: "  search %-26@ %8ld matches  %7.2f ms", q as NSString, r.total, r.milliseconds))
     }

@@ -129,6 +129,14 @@ final class SearchModel: ObservableObject {
         }
     }
     private static let filterKey = "searchFilter"
+    /// Temp and generated files (node_modules, .git, caches, *.tmp...) are hidden unless ticked.
+    @Published var showTemp = UserDefaults.standard.bool(forKey: SearchModel.showTempKey) {
+        didSet {
+            UserDefaults.standard.set(showTemp, forKey: SearchModel.showTempKey)
+            run()
+        }
+    }
+    private static let showTempKey = "showTempFiles"
 
     private static let scopeKey = "searchScope"
     private let queue = DispatchQueue(label: "MacEverything.app.search")
@@ -164,7 +172,8 @@ final class SearchModel: ObservableObject {
         generation += 1
         let gen = generation
         let request = IPCRequest(command: "search", query: query, limit: 500, sort: sort, descending: descending,
-                                 scope: [scope.query, filter.query].filter { !$0.isEmpty }.joined(separator: " "))
+                                 scope: [scope.query, filter.query, showTemp ? "" : "!temp:"]
+                                     .filter { !$0.isEmpty }.joined(separator: " "))
         queue.async {
             let text: String
             var newHits: [SearchHit] = []
@@ -275,6 +284,8 @@ struct SearchView: View {
                 .pickerStyle(.menu)
                 .frame(width: 150)
                 Toggle("Descending", isOn: $model.descending).toggleStyle(.checkbox)
+                Toggle("Show temp files", isOn: $model.showTemp).toggleStyle(.checkbox)
+                    .help("Temp and generated files: node_modules, .git, build folders, caches, *.tmp, system temp folders")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)

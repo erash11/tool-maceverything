@@ -16,6 +16,8 @@ public struct Query {
         case modified(Comparison, Int64, Int64, negated: Bool) // [start, end) seconds since 1970
         case filesOnly
         case foldersOnly
+        /// Temp and generated files, and everything inside temp folders (see TempFiles).
+        case temp(negated: Bool)
     }
 
     public enum Comparison: Equatable { case less, lessOrEqual, greater, greaterOrEqual, equal }
@@ -81,6 +83,7 @@ public struct Query {
         // "!file:" means folders and "!folder:" means files.
         if lower == "file:" { return negated ? .foldersOnly : .filesOnly }
         if lower == "folder:" { return negated ? .filesOnly : .foldersOnly }
+        if lower == "temp:" { return .temp(negated: negated) }
         if let filter = FileFilter.forKeyword(lower), let list = FileFilter.extensions[filter] {
             return .ext(list.map { Array(("." + $0).utf8) }, negated: negated)
         }

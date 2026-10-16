@@ -48,6 +48,9 @@ public final class FileIndex {
     /// instead of all records.
     var rootIdList: [Int32] = []
     public internal(set) var deletedCount = 0
+    /// See `tempMask()`. Searches run concurrently under the shared lock, so the cache has its own.
+    let tempMaskLock = NSLock()
+    var tempMaskCache: (records: Int, deleted: Int, mask: [UInt8])?
 
     /// Saved FSEvents state per root path.
     public var volumeState: [String: VolumeState] = [:]
@@ -286,6 +289,9 @@ public final class FileIndex {
 
     /// Takes over another index's contents, so holders of this instance see the new data.
     public func adopt(_ other: FileIndex) {
+        tempMaskLock.lock()
+        tempMaskCache = nil
+        tempMaskLock.unlock()
         records = other.records
         names = other.names
         lowerNames = other.lowerNames
