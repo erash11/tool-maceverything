@@ -60,18 +60,22 @@ enum TempFiles {
 
 extension FileIndex {
     /// One byte per record: 1 when it is temp or inside a temp folder. Parents always come
-    /// before their children, so one pass in id order is enough. Cached until records change.
+    /// before their children, so one pass in id order is enough. Records are only appended and
+    /// a name never changes, so the cached mask is extended for new records instead of rebuilt;
+    /// deleted records are skipped by the search anyway. Compaction (adopt) drops the cache.
     func tempMask() -> [UInt8] {
         tempMaskLock.lock()
         defer { tempMaskLock.unlock() }
-        if let c = tempMaskCache, c.records == records.count, c.deleted == deletedCount { return c.mask }
-        var mask = [UInt8](repeating: 0, count: records.count)
+        var mask = tempMaskCache?.mask ?? []
+        if mask.count == records.count { return mask }
+        let first = mask.count
+        mask.append(contentsOf: repeatElement(0, count: records.count - first))
         for path in TempFiles.folderPaths {
-            if let id = lookup(path) { mask[Int(id)] = 1 }
+            if let id = lookup(path), Int(id) >= first { mask[Int(id)] = 1 }
         }
         records.withUnsafeBufferPointer { recs in
         lowerNames.withUnsafeBufferPointer { lower in
-            for i in 0..<recs.count where mask[i] == 0 {
+            for i in first..<recs.count where mask[i] == 0 {
                 let r = recs[i]
                 if (r.parent >= 0 && mask[Int(r.parent)] != 0) || TempFiles.isTemp(r, lower) { mask[i] = 1 }
             }
