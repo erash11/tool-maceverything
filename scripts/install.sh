@@ -36,7 +36,7 @@ cat > "$PLIST" <<PLIST
   <key>ProgramArguments</key><array><string>$BIN_DIR/everythingd</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>Standard</string>
   <key>StandardErrorPath</key><string>$HOME/Library/Logs/everythingd.log</string>
 </dict>
 </plist>

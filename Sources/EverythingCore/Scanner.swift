@@ -137,6 +137,8 @@ public struct Scanner {
         public var directories = 0
         public var unreadable = 0
         public var seconds = 0.0
+        /// Folders whose listing took longest (over 0.5 s), slowest first, at most 10.
+        public var slowest: [(path: String, seconds: Double)] = []
     }
 
     /// Walks everything under `root` (already in the index) level by level. Each level's
@@ -151,11 +153,17 @@ public struct Scanner {
             var results = [[ScannedEntry]?](repeating: nil, count: level.count)
             let lock = NSLock()
             let current = level
+            var slow: [(String, Double)] = []
             let listedBefore = stats.entries
             var listedNow = 0
             DispatchQueue.concurrentPerform(iterations: current.count) { i in
+                let t0 = DispatchTime.now().uptimeNanoseconds
                 let listed = list(current[i].path)
+                let took = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9
                 lock.lock()
+                if took > 0.5 {
+                    slow.append((current[i].path, took))
+                }
                 results[i] = listed
                 listedNow += listed?.count ?? 0
                 let soFar = listedBefore + listedNow
@@ -179,6 +187,11 @@ public struct Scanner {
                         if !exclusions.contains(childPath) { next.append((childPath, id)) }
                     }
                 }
+            }
+            if !slow.isEmpty {
+                stats.slowest = (stats.slowest + slow.map { (path: $0.0, seconds: $0.1) })
+                    .sorted { $0.seconds > $1.seconds }
+                    .prefix(10).map { $0 }
             }
             level = next
         }

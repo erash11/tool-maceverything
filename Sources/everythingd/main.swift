@@ -29,7 +29,10 @@ if FileManager.default.fileExists(atPath: probe), (try? FileManager.default.cont
     logLine("warning: no Full Disk Access; protected folders will be missing. Add everythingd in System Settings > Privacy & Security > Full Disk Access.")
 }
 
-DispatchQueue.global(qos: .utility).async { service.start() }
+// The first scan runs at normal priority: at .utility (and under launchd's Background
+// process type) macOS throttles its disk reads, which made a 4M-entry scan take 24 minutes.
+// Live updates afterwards run on the service's own queue.
+DispatchQueue.global(qos: .userInitiated).async { service.start() }
 
 var signalSources: [DispatchSourceSignal] = []
 for sig in [SIGTERM, SIGINT] {

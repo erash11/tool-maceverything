@@ -208,6 +208,9 @@ public final class IndexService {
             locked { _scannedSoFar = base + stats.entries }
             log("scanned \(root): \(stats.entries) entries, \(stats.unreadable) unreadable folders, "
                 + String(format: "%.1f s", stats.seconds))
+            for s in stats.slowest {
+                log("  slow folder: " + String(format: "%.1f s  ", s.seconds) + s.path)
+            }
             target.volumeState[root] = .init(volumeUUID: Watcher.volumeUUID(for: root) ?? "",
                                              lastEventId: since[root] ?? 0,
                                              perDevice: Watcher(root: root) { _ in }.isPerDevice)

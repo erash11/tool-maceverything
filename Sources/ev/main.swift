@@ -124,6 +124,7 @@ func runBench(_ folder: String) {
         let stats = Scanner(useBulk: bulk).scanTree(into: index, root: root, rootPath: folder)
         print(String(format: "  %@: %ld entries, %ld folders, %ld unreadable, %.2f s",
                      label, stats.entries, stats.directories, stats.unreadable, stats.seconds))
+        for s in stats.slowest { print(String(format: "    slow folder: %.1f s  ", s.seconds) + s.path) }
     }
     let index = FileIndex()
     let root = index.addRoot(folder)
