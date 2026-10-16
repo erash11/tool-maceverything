@@ -218,7 +218,8 @@ struct SearchView: View {
     @State private var sortOrder = [KeyPathComparator(\SearchHit.name)]
     @FocusState private var fieldFocused: Bool
     /// Which columns are shown, their order and widths (right-click a header; drag to reorder).
-    @AppStorage("resultColumns") private var columnsData = Data()
+    /// Defaults to Name | Type | Path, like Everything.
+    @AppStorage("resultColumns.v2") private var columnsData = Data()
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -294,38 +295,45 @@ struct SearchView: View {
                 TableColumn("Name", value: \.name) { nameCell($0) }
                     .customizationID("name")
                     .disabledCustomizationBehavior(.visibility)
-                TableColumn("Folder", value: \.path) { folderCell($0) }
+                TableColumn("Type") { typeCell($0) }
+                    .width(min: 80, ideal: 150, max: 260)
+                    .customizationID("type")
+                TableColumn("Path", value: \.path) { folderCell($0) }
                     .customizationID("folder")
                 TableColumn("Size", value: \.size) { sizeCell($0) }
                     .width(min: 60, ideal: 80, max: 120)
                     .customizationID("size")
-                TableColumn("Modified", value: \.modified) { modifiedCell($0) }
+                    .defaultVisibility(.hidden)
+                TableColumn("Date Modified", value: \.modified) { modifiedCell($0) }
                     .width(min: 110, ideal: 140, max: 180)
                     .customizationID("modified")
+                    .defaultVisibility(.hidden)
                 TableColumn("Extension") { hit in Text(Self.fileExtension(hit)) }
                     .width(min: 50, ideal: 70, max: 120)
                     .customizationID("extension")
                     .defaultVisibility(.hidden)
-                TableColumn("Kind") { hit in Text(Self.kind(hit)).foregroundStyle(.secondary).lineLimit(1) }
-                    .width(min: 80, ideal: 140, max: 240)
-                    .customizationID("kind")
-                    .defaultVisibility(.hidden)
-                TableColumn("Path") { hit in
+                TableColumn("Full Path") { hit in
                     Text(hit.path).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
-                .customizationID("path")
+                .customizationID("fullpath")
                 .defaultVisibility(.hidden)
             })
         } else {
             withBehavior(Table(model.hits, selection: $selection, sortOrder: $sortOrder) {
                 TableColumn("Name", value: \.name) { nameCell($0) }
-                TableColumn("Folder", value: \.path) { folderCell($0) }
+                TableColumn("Type") { typeCell($0) }
+                    .width(min: 80, ideal: 150, max: 260)
+                TableColumn("Path", value: \.path) { folderCell($0) }
                 TableColumn("Size", value: \.size) { sizeCell($0) }
                     .width(min: 60, ideal: 80, max: 120)
-                TableColumn("Modified", value: \.modified) { modifiedCell($0) }
+                TableColumn("Date Modified", value: \.modified) { modifiedCell($0) }
                     .width(min: 110, ideal: 140, max: 180)
             })
         }
+    }
+
+    private func typeCell(_ hit: SearchHit) -> some View {
+        Text(Self.kind(hit)).foregroundStyle(.secondary).lineLimit(1)
     }
 
     private func nameCell(_ hit: SearchHit) -> some View {
