@@ -35,6 +35,8 @@ query-checked on the Mac with `ev`, window not yet seen. Detail:
 - None. #9 decided 2026-10-16: keep building (see `docs/DECISIONS.md`).
 
 ## Gotchas
+- On the Mac, `swift build` works (Command Line Tools) but `swift test` fails with "no such
+  module 'XCTest'" (no full Xcode). Build locally, let CI run the tests.
 - No Swift toolchain in Claude cloud sessions: CI is the compiler. When the GitHub MCP is down,
   `curl https://api.github.com/repos/erash11/MacEverything/actions/runs` and
   `.../actions/jobs/<id>/logs` work without auth (public repo).
