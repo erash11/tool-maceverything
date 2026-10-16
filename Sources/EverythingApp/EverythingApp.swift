@@ -14,6 +14,7 @@ struct EverythingApp: App {
     var body: some Scene {
         MenuBarExtra("MacEverything", systemImage: "magnifyingglass") {
             Button("Search  (Option-Space)") { appDelegate.showSearch() }
+            Button("Locations…") { appDelegate.showLocations() }
             Divider()
             Button("Rebuild Index") { _ = try? IPC.send(IPCRequest(command: "rescan")) }
             Button("Quit MacEverything") { NSApp.terminate(nil) }
@@ -24,6 +25,23 @@ struct EverythingApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: NSPanel?
     private let model = SearchModel()
+    private var locationsWindow: NSWindow?
+    private let locations = LocationsModel()
+
+    func showLocations() {
+        if locationsWindow == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 380),
+                             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            w.title = "MacEverything Locations"
+            w.isReleasedWhenClosed = false
+            w.contentView = NSHostingView(rootView: LocationsView(model: locations))
+            w.center()
+            locationsWindow = w
+        }
+        locations.refresh()
+        NSApp.activate(ignoringOtherApps: true)
+        locationsWindow?.makeKeyAndOrderFront(nil)
+    }
     private var hotKey: HotKey?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -292,5 +310,109 @@ struct SearchView: View {
     private func copy(_ paths: Set<String>) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(paths.sorted().joined(separator: "\n"), forType: .string)
+    }
+}
+
+/// What is indexed, and the locations added on top of the defaults (config.json extraRoots).
+final class LocationsModel: ObservableObject {
+    @Published var indexed: [String] = []
+    @Published var added: [String] = []
+    @Published var message = ""
+
+    func refresh() {
+        let config = ServiceConfig.load()
+        added = config.extraRoots ?? []
+        DispatchQueue.global().async {
+            let roots = (try? IPC.send(IPCRequest(command: "status")))?.status?.roots
+            DispatchQueue.main.async { self.indexed = roots ?? config.resolvedRoots() }
+        }
+    }
+
+    func choose() {
+        let open = NSOpenPanel()
+        open.canChooseDirectories = true
+        open.canChooseFiles = false
+        open.allowsMultipleSelection = false
+        open.prompt = "Add"
+        open.message = "Choose a folder, drive or network share to index"
+        guard open.runModal() == .OK, let url = open.url else { return }
+        add(url.path)
+    }
+
+    func add(_ path: String) {
+        var config = ServiceConfig.load()
+        let new = IndexService.canonical(path)
+        let current = IndexService.normalizeRoots(config.resolvedRoots(), exclusions: config.exclusionSet)
+        let after = IndexService.normalizeRoots(current + [new], exclusions: config.exclusionSet)
+        guard after != current else {
+            let outer = current.first { $0 == "/" || new == $0 || new.hasPrefix($0 + "/") } ?? "/"
+            message = "Already indexed: \(new) is inside \(outer)."
+            return
+        }
+        config.extraRoots = (config.extraRoots ?? []) + [new]
+        save(config, done: "Added \(new). It is being scanned and will appear in results shortly.")
+    }
+
+    func remove(_ path: String) {
+        var config = ServiceConfig.load()
+        config.extraRoots = (config.extraRoots ?? []).filter { $0 != path }
+        if config.extraRoots?.isEmpty == true { config.extraRoots = nil }
+        save(config, done: "Removed \(path).")
+    }
+
+    private func save(_ config: ServiceConfig, done: String) {
+        do {
+            try config.save()
+        } catch {
+            message = "Could not save the settings: \(error.localizedDescription)"
+            return
+        }
+        // The daemon restarts with the new list, keeps what it already indexed, and scans only
+        // the new location.
+        _ = try? IPC.send(IPCRequest(command: "reload"))
+        message = done
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { self.refresh() }
+        refresh()
+    }
+}
+
+struct LocationsView: View {
+    @ObservedObject var model: LocationsModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Indexed now").font(.headline)
+            Text("Your Mac's disk (including Google Drive, Dropbox, Box, OneDrive and iCloud folders) and every drive you plug in are indexed automatically.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            List {
+                ForEach(model.indexed, id: \.self) { root in
+                    HStack {
+                        Image(systemName: root == "/" ? "desktopcomputer" : root.hasPrefix("/Volumes/") ? "externaldrive" : "folder")
+                        Text(root == "/" ? "This Mac  (/)" : root)
+                        Spacer()
+                        if model.added.contains(root) {
+                            Button("Remove") { model.remove(root) }
+                        }
+                    }
+                }
+                ForEach(model.added.filter { !model.indexed.contains($0) }, id: \.self) { root in
+                    HStack {
+                        Image(systemName: "clock")
+                        Text(root).foregroundStyle(.secondary)
+                        Text("waiting (not mounted, or being added)").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Remove") { model.remove(root) }
+                    }
+                }
+            }
+            HStack {
+                Button("Add Folder or Drive…") { model.choose() }
+                Spacer()
+                Text(model.message).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+        }
+        .padding(14)
+        .frame(minWidth: 520, minHeight: 300)
     }
 }

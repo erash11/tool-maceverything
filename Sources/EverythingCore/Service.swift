@@ -10,13 +10,17 @@ public struct ServiceConfig: Codable {
     /// so `[]` indexes browser caches again.
     public var excludedNames: [String]?
     public var includeExternalVolumes: Bool?
+    /// Locations added on top of the default roots (the search window's Locations list):
+    /// network shares, folders outside the scanned volumes, excluded folders.
+    public var extraRoots: [String]?
 
     public init(roots: [String]? = nil, exclusions: [String]? = nil, excludedNames: [String]? = nil,
-                includeExternalVolumes: Bool? = nil) {
+                includeExternalVolumes: Bool? = nil, extraRoots: [String]? = nil) {
         self.roots = roots
         self.exclusions = exclusions
         self.excludedNames = excludedNames
         self.includeExternalVolumes = includeExternalVolumes
+        self.extraRoots = extraRoots
     }
 
     public static var defaultURL: URL { FileIndex.defaultDirectory.appendingPathComponent("config.json") }
@@ -24,6 +28,26 @@ public struct ServiceConfig: Codable {
     public static func load(from url: URL = defaultURL) -> ServiceConfig {
         guard let data = try? Data(contentsOf: url) else { return ServiceConfig() }
         return (try? JSONDecoder().decode(ServiceConfig.self, from: data)) ?? ServiceConfig()
+    }
+
+    public func save(to url: URL = defaultURL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(self).write(to: url, options: .atomic)
+    }
+
+    /// Every location to index: the configured or default roots (the boot volume and each
+    /// local drive mounted now) plus the added ones.
+    public func resolvedRoots(defaults: @autoclosure () -> [String] = IndexService.defaultRoots()) -> [String] {
+        let base = roots ?? (includeExternalVolumes == false ? ["/"] : defaults())
+        return base + (extraRoots ?? []).map(IndexService.canonical)
+    }
+
+    public var exclusionSet: Set<String> {
+        var out = Scanner.defaultExclusions
+        for extra in exclusions ?? [] { out.insert(IndexService.canonical(extra)) }
+        return out
     }
 }
 

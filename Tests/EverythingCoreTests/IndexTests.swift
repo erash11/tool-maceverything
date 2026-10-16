@@ -334,4 +334,24 @@ final class IndexTests: XCTestCase {
         }
         XCTAssertEqual(FileFilter.compressed.title, "Compressed")
     }
+
+    func testConfigLocations() throws {
+        var config = ServiceConfig()
+        XCTAssertEqual(config.resolvedRoots(defaults: ["/", "/Volumes/A"]), ["/", "/Volumes/A"])
+        config.includeExternalVolumes = false
+        XCTAssertEqual(config.resolvedRoots(defaults: ["/", "/Volumes/A"]), ["/"])
+        config.includeExternalVolumes = nil
+        config.extraRoots = ["/Volumes/No Such Share"]
+        XCTAssertEqual(config.resolvedRoots(defaults: ["/"]), ["/", "/Volumes/No Such Share"])
+        // A folder already inside an indexed root adds nothing (the Locations window says so).
+        let current = IndexService.normalizeRoots(["/"], exclusions: Scanner.defaultExclusions)
+        XCTAssertEqual(IndexService.normalizeRoots(current + ["/Users/someone/Documents"],
+                                                   exclusions: Scanner.defaultExclusions), current)
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mev-config-\(UUID().uuidString)/config.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try config.save(to: url)
+        XCTAssertEqual(ServiceConfig.load(from: url).extraRoots, ["/Volumes/No Such Share"])
+    }
 }
