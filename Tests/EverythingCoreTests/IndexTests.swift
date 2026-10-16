@@ -301,7 +301,7 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(scoped("plan |", .drive("/Volumes/Work Disk")), ["plan.mov"])
         XCTAssertEqual(names(index, "plan \"drive:work disk\""), ["plan.mov"])
         XCTAssertEqual(names(index, "plan !drive:work disk"), [])  // "disk" becomes its own word
-        XCTAssertEqual(names(index, "plan !\"drive:Work Disk\""), ["plan.docx", "plan.txt"])
+        XCTAssertEqual(names(index, "plan !\"drive:Work Disk\""), ["plan.docx", "plan.txt", "plan.xlsx"])
     }
 
     func testDriveKeywordAndScopeChoices() {
