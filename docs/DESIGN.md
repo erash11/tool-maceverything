@@ -7,7 +7,8 @@ Full design doc: https://claude.ai/code/artifact/2dfce39a-ac50-4398-ac64-0f0b77d
 1. **First scan.** `Scanner.scanTree` walks each root level by level. Each level's folders are
    listed in parallel with `getattrlistbulk()`, which returns name, type, size and date for a
    whole folder per call. Firmlink duplicates (`/System/Volumes/Data`) and system mounts are
-   excluded; other volumes under `/Volumes` get their own roots.
+   excluded, and so are the home folder's cloud folders (`Scanner.cloudExclusions`); other
+   volumes under `/Volumes` get their own roots.
 2. **Index.** `FileIndex` stores one fixed-size `Record` per entry (parent id, name offsets,
    size, date, flags) with names in two shared byte pools (original and lowercase). A sorted
    id list gives name order without sorting at query time.

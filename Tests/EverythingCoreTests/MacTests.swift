@@ -153,6 +153,42 @@ final class MacTests: XCTestCase {
         XCTAssertFalse(service.isExcluded(dir + "/a/Cache"))
     }
 
+    func testCloudFoldersAreExcludedByDefault() throws {
+        let home = NSHomeDirectory()
+        let cloud = ["/Library/CloudStorage", "/Library/Mobile Documents", "/Library/Application Support/FileProvider"]
+        XCTAssertEqual(Scanner.cloudExclusions(home: "/h"), Set(cloud.map { "/h" + $0 }))
+        XCTAssertTrue(Scanner.defaultExclusions.isSuperset(of: cloud.map { home + $0 }))
+
+        // The walk lists each cloud folder but never goes inside it.
+        let drive = dir + "/Library/CloudStorage/GoogleDrive-me@x.com"
+        try FileManager.default.createDirectory(atPath: drive + "/.tmp", withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: drive + "/plan.docx", contents: nil)
+        let index = FileIndex()
+        let root = index.addRoot(dir)
+        let scanner = Scanner(exclusions: Scanner.cloudExclusions(home: dir))
+        scanner.scanTree(into: index, root: root, rootPath: dir)
+        XCTAssertNotNil(index.lookup(dir + "/Library/CloudStorage"), "the cloud folder itself is listed")
+        XCTAssertNil(index.lookup(drive), "its accounts are not")
+        XCTAssertTrue(scanner.refresh(index, dir: root, path: dir, recursive: true))
+        XCTAssertNil(index.lookup(drive + "/plan.docx"), "a refresh does not walk into it either")
+
+        // Changes inside them are ignored, so the daemon never re-lists them.
+        let service = IndexService(roots: ["/"], indexURL: URL(fileURLWithPath: dir + "-cloud.bin"))
+        for folder in cloud.map({ home + $0 }) {
+            XCTAssertTrue(service.isExcluded(folder))
+            XCTAssertTrue(service.isExcluded(folder + "/GoogleDrive-me@x.com/.tmp"))
+        }
+        XCTAssertFalse(service.isExcluded(home + "/Library/Application Support/MacEverything"))
+
+        // Opting back in: an account added as a location is its own root and is watched.
+        let account = home + "/Library/CloudStorage/GoogleDrive-me@x.com"
+        XCTAssertEqual(IndexService.normalizeRoots(["/", account], exclusions: Scanner.defaultExclusions),
+                       ["/", account])
+        let optedIn = IndexService(roots: ["/", account], indexURL: URL(fileURLWithPath: dir + "-cloud2.bin"))
+        XCTAssertFalse(optedIn.isExcluded(account + "/.tmp"))
+        XCTAssertTrue(optedIn.isExcluded(home + "/Library/Application Support/FileProvider/x"))
+    }
+
     func testDeletedRootIsEmptied() throws {
         let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-root.bin"))
         service.start()

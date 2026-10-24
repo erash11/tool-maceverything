@@ -7,10 +7,22 @@ import Darwin
 public struct Scanner {
     /// Paths never descended into. Other volumes get their own roots; these are system mounts
     /// that either duplicate the boot volume (firmlinks) or hold nothing a person searches for.
-    public static let defaultExclusions: Set<String> = [
+    /// Also the cloud folders in the home folder of the user running the daemon.
+    public static let defaultExclusions: Set<String> = Set([
         "/System/Volumes", "/Volumes", "/dev", "/private/var/vm", "/private/var/db/uuidtext",
         "/.vol", "/net", "/home", "/cores", "/.Spotlight-V100", "/.fseventsd", "/.DocumentRevisions-V100",
-    ]
+    ]).union(Scanner.cloudExclusions(home: NSHomeDirectory()))
+
+    /// Synced cloud folders, listed but not walked into: Google Drive, OneDrive, Dropbox and Box
+    /// (CloudStorage), iCloud (Mobile Documents), and File Provider's own store. Walking them
+    /// makes the providers download and lock files: Drive's mount hangs reads and churns its
+    /// .tmp folder, and File Provider's wharf/propagate folders answer EDEADLK. By 2026-10-24
+    /// that had written about 27,000 "giving up" lines to the daemon log. To index one account
+    /// anyway, add its folder as a location (Locations window, or `extraRoots` in config.json).
+    public static func cloudExclusions(home: String) -> Set<String> {
+        Set(["/Library/CloudStorage", "/Library/Mobile Documents", "/Library/Application Support/FileProvider"]
+            .map { home + $0 })
+    }
 
     /// Folder names never descended into, wherever they are: browser and Electron app caches.
     /// They hold hundreds of thousands of hashed file names nobody searches for, cost the most

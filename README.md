@@ -67,6 +67,12 @@ Browser and Electron app caches (folders named `Cache_Data`, `Code Cache`, `GPUC
 `DawnGraphiteCache`, `DawnWebGPUCache`, `cache2`) are listed but not walked into.
 `"excludedNames": [...]` replaces that list; `[]` indexes them again.
 
+Cloud folders in your home folder are listed but not walked into: `~/Library/CloudStorage`
+(Google Drive, OneDrive, Dropbox, Box), `~/Library/Mobile Documents` (iCloud) and
+`~/Library/Application Support/FileProvider`. Walking them makes the providers fetch and lock
+files and fills the daemon log with errors. To index one cloud account anyway, add its folder in
+the Locations window (or `"extraRoots"` in config.json); it then gets its own root and watcher.
+
 ## Develop
 
 `swift build`, `swift test`, `.build/debug/ev --bench ~/Documents`. Design notes: `docs/DESIGN.md`.
