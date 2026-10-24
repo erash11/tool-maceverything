@@ -1,11 +1,21 @@
 # Status
 
 ## Current state
-Running daily on Eric's MacBook (macOS 26.6.2) since 2026-10-16: daemon, `ev` CLI and menu-bar
-app, signed with the local certificate, Full Disk Access on. CI (macOS 15 runners) is the
-compiler and is green on `main`. 4.09M entries indexed (`/` plus the CRASHBOX drive); full scan
-228 to 279 s, scan end to saved index 23 s, startup from the saved index in seconds, daemon
-memory 16 to 30 MB. Detail of the first real-Mac day: `docs/handoffs/2026-10-16-real-mac-and-ui.md`.
+Running daily on Eric's MacBook since 2026-10-16 (macOS 27.0.1 as of 2026-10-24): daemon,
+`ev` CLI and menu-bar app, signed with the local certificate, Full Disk Access on. CI (macOS 15
+runners) is the compiler and is green on `main` (51 tests at d2b8ccc). Detail of the first
+real-Mac day:
+`docs/handoffs/2026-10-16-real-mac-and-ui.md`.
+
+2026-10-24: cloud folders are no longer indexed (`~/Library/CloudStorage`, `~/Library/Mobile
+Documents`, `~/Library/Application Support/FileProvider`; see `docs/DECISIONS.md`). The daemon
+had written about 27,000 "giving up ... Resource deadlock avoided" lines (5.5 MB) to
+`~/Library/Logs/everythingd.log` re-listing them. New daemon installed (daemon only, see
+Gotchas) and `ev --rescan` run: 3.21M entries for `/` (was 4.10M; 887K were cloud), full scan
+122 s, 0 entries left under the three folders. The old log was kept as history (27,706 lines
+before the restart). No "giving up" lines from the restart (06:12 UTC) to 06:21 UTC, and live
+updates kept applying. The old failures came in bursts with quiet hours between, so recheck
+with `grep -c "giving up" ~/Library/Logs/everythingd.log` (27,195 on 2026-10-24) after a day.
 
 Search window, all confirmed on the Mac: scope menu (All, This Mac, Cloud, each drive), file-type
 menu (Everything's filters), "Show temp files" toggle (temp hidden by default), header sorting,
@@ -13,7 +23,8 @@ right-click column chooser, drag to reorder, default columns Name | Type | Path.
 Scope menu also lists each cloud account (Google Drive, OneDrive, Dropbox, Box per
 ~/Library/CloudStorage folder, plus iCloud Drive) under Cloud, added 2026-10-16: built and
 query-checked on the Mac with `ev`, window not yet seen. Detail:
-`docs/handoffs/2026-10-16-cloud-account-scopes.md`.
+`docs/handoffs/2026-10-16-cloud-account-scopes.md`. Since 2026-10-24 those scopes return
+nothing unless the account is added in Locations (Next #1).
 
 | Measured on CI, 1.35M entries | Result |
 | --- | --- |
@@ -23,20 +34,36 @@ query-checked on the Mac with `ev`, window not yet seen. Detail:
 | `report !temp:` (first search, builds the mask) | 43 ms; later searches only extend it |
 
 ## Next
-1. Run `bash scripts/install.sh` in `~/DEV/MacEverything`, open the search window, and pick
-   "Google Drive (eric.rash11@gmail.com)" in the scope menu to confirm the per-account scopes.
-2. On the Mac: Locations window (menu bar > Locations…), live updates (create, rename, delete a
+1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
+   location; `SearchScope.choices` lists every ~/Library/CloudStorage folder today. Small change
+   plus a test tweak.
+2. The menu-bar app no longer builds on this Mac (Gotchas): install full Xcode, or wait for
+   Command Line Tools that ship SwiftUIMacros. Until then `scripts/install.sh` stops at
+   `make-app.sh`; the installed 2026-10-16 app keeps running.
+3. On the Mac: Locations window (menu bar > Locations…), live updates (create, rename, delete a
    file and check `ev`), unplug and replug CRASHBOX. Rest of the #2 checklist.
-3. Post the real-Mac numbers on #3 and close it (GitHub MCP was down at the end of 2026-10-16).
-4. Delete the `codex-review` and `codex-review-base` branches on GitHub, close #10.
-5. Optional: OneDrive folders that each take exactly 6.0 s to list; Type column sorting.
+4. Post the real-Mac numbers on #3 and close it (GitHub MCP was down at the end of 2026-10-16).
+5. Delete the `codex-review` and `codex-review-base` branches on GitHub, close #10.
+6. Optional: folders that each take exactly 6.0 s to list (once OneDrive; in the 2026-10-24
+   scan, sandbox folders under ~/Library/Containers); Type column sorting.
 
 ## Open questions
 - None. #9 decided 2026-10-16: keep building (see `docs/DECISIONS.md`).
 
 ## Gotchas
-- On the Mac, `swift build` works (Command Line Tools) but `swift test` fails with "no such
-  module 'XCTest'" (no full Xcode). Build locally, let CI run the tests.
+- On the Mac, `swift test` fails with "no such module 'XCTest'" (no full Xcode). Build locally,
+  let CI run the tests.
+- Since macOS 27 / Swift 6.4 Command Line Tools (2026-10-24), plain `swift build` fails in
+  EverythingApp: "plugin for module 'SwiftUIMacros' not found" (it ships only with Xcode).
+  `swift build -c release --product everythingd` (and `--product ev`) still work.
+- Daemon-only install while the app cannot build: copy `.build/release/everythingd` to
+  `build/`, sign it with `codesign --force --options runtime --sign "MacEverything Local
+  Signing" --identifier com.erash11.maceverything.daemon`, check `codesign -d -r-` matches the
+  installed binary (same requirement keeps Full Disk Access), move the old
+  `~/.local/bin/everythingd` aside, copy the new one in, then
+  `launchctl kickstart -k gui/$(id -u)/com.erash11.maceverything.daemon`. On 2026-10-24 the
+  kickstart killed the old daemon mid-save and the first new launch died with
+  OS_REASON_CODESIGNING; launchd KeepAlive started it again 18 s later and it ran fine.
 - No Swift toolchain in Claude cloud sessions: CI is the compiler. When the GitHub MCP is down,
   `curl https://api.github.com/repos/erash11/MacEverything/actions/runs` and
   `.../actions/jobs/<id>/logs` work without auth (public repo).
@@ -47,6 +74,15 @@ query-checked on the Mac with `ev`, window not yet seen. Detail:
   rescanned at every daemon start by design (about 15 s for 220K entries).
 - The daemon restarts itself (launchd KeepAlive) when locations change: `ev`/app "reload", or the
   30 s check finding a new drive. A restart during a full scan waits for the scan to finish.
-- `ev --rescan` right after an install is not needed; the daemon loads its saved index.
-- DexaProject (Google Drive) is indexed by name, per Eric's choice not to exclude anything. Never
-  paste search results from it into chat or an external service.
+- `ev --rescan` right after an install is not needed; the daemon loads its saved index. Except
+  when the exclusions change: loading never prunes newly excluded folders, so their entries stay
+  until a full scan (887K cloud entries on 2026-10-24).
+- To check the cloud exclusion without reading the Drive mount: `ev --count
+  '"path:/library/cloudstorage/"'` (and the same for `/application support/fileprovider/`,
+  `/library/mobile documents/`) should print 0. Never list or walk ~/Library/CloudStorage by
+  hand; the Drive FUSE mount can hang.
+- DexaProject (Google Drive) is no longer indexed since 2026-10-24. If a Google Drive account is
+  added back as a location, its names return: never paste search results from it into chat or
+  an external service.
+- The unauthenticated GitHub API now returns 404 for this repo (2026-10-24); use `gh run list
+  -R erash11/MacEverything` for CI.
