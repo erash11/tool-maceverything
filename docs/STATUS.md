@@ -12,10 +12,11 @@ Documents`, `~/Library/Application Support/FileProvider`; see `docs/DECISIONS.md
 had written about 27,000 "giving up ... Resource deadlock avoided" lines (5.5 MB) to
 `~/Library/Logs/everythingd.log` re-listing them. New daemon and `ev` installed (not the app,
 see Gotchas) and `ev --rescan` run: 3.21M entries for `/` (was 4.10M; 887K were cloud, so Full
-Disk Access still holds), full scan 122 s, 0 entries left under the three folders. The old log was kept as history (27,706 lines
-before the restart). No "giving up" lines from the restart (06:12 UTC) to 06:21 UTC, and live
-updates kept applying. The old failures came in bursts with quiet hours between, so recheck
-with `grep -c "giving up" ~/Library/Logs/everythingd.log` (27,195 on 2026-10-24) after a day.
+Disk Access still holds), full scan 122 s, 0 entries left under the three folders. Before the
+restart the log held 27,706 lines (27,195 "giving up"); the daily backup now trims it to its last
+2000 lines once it passes 2 MB. No "giving up" lines from the restart (06:12 UTC) to 08:30 UTC, and
+live updates kept applying. The old failures came in bursts, so recheck after a day with a count
+that survives the trim: `awk '$1 >= "2026-10-24T06:12:22"' ~/Library/Logs/everythingd.log | grep -c "giving up"` (want 0).
 
 Search window, all confirmed on the Mac: scope menu (All, This Mac, Cloud, each drive), file-type
 menu (Everything's filters), "Show temp files" toggle (temp hidden by default), header sorting,
