@@ -10,9 +10,9 @@ real-Mac day:
 2026-10-24: cloud folders are no longer indexed (`~/Library/CloudStorage`, `~/Library/Mobile
 Documents`, `~/Library/Application Support/FileProvider`; see `docs/DECISIONS.md`). The daemon
 had written about 27,000 "giving up ... Resource deadlock avoided" lines (5.5 MB) to
-`~/Library/Logs/everythingd.log` re-listing them. New daemon installed (daemon only, see
-Gotchas) and `ev --rescan` run: 3.21M entries for `/` (was 4.10M; 887K were cloud), full scan
-122 s, 0 entries left under the three folders. The old log was kept as history (27,706 lines
+`~/Library/Logs/everythingd.log` re-listing them. New daemon and `ev` installed (not the app,
+see Gotchas) and `ev --rescan` run: 3.21M entries for `/` (was 4.10M; 887K were cloud, so Full
+Disk Access still holds), full scan 122 s, 0 entries left under the three folders. The old log was kept as history (27,706 lines
 before the restart). No "giving up" lines from the restart (06:12 UTC) to 06:21 UTC, and live
 updates kept applying. The old failures came in bursts with quiet hours between, so recheck
 with `grep -c "giving up" ~/Library/Logs/everythingd.log` (27,195 on 2026-10-24) after a day.
@@ -24,7 +24,10 @@ Scope menu also lists each cloud account (Google Drive, OneDrive, Dropbox, Box p
 ~/Library/CloudStorage folder, plus iCloud Drive) under Cloud, added 2026-10-16: built and
 query-checked on the Mac with `ev`, window not yet seen. Detail:
 `docs/handoffs/2026-10-16-cloud-account-scopes.md`. Since 2026-10-24 those scopes return
-nothing unless the account is added in Locations (Next #1).
+nothing unless the account is added as a location (Next #1). Until the app is rebuilt, add it in
+config.json `extraRoots`, not the Locations window: the installed 2026-10-16 app still uses the
+old exclusions and answers "Already indexed: ... is inside /". The daemon's 30 s location check
+picks up a config.json change on its own.
 
 | Measured on CI, 1.35M entries | Result |
 | --- | --- |
@@ -61,9 +64,10 @@ nothing unless the account is added in Locations (Next #1).
   Signing" --identifier com.erash11.maceverything.daemon`, check `codesign -d -r-` matches the
   installed binary (same requirement keeps Full Disk Access), move the old
   `~/.local/bin/everythingd` aside, copy the new one in, then
-  `launchctl kickstart -k gui/$(id -u)/com.erash11.maceverything.daemon`. On 2026-10-24 the
-  kickstart killed the old daemon mid-save and the first new launch died with
-  OS_REASON_CODESIGNING; launchd KeepAlive started it again 18 s later and it ran fine.
+  `launchctl kickstart -k gui/$(id -u)/com.erash11.maceverything.daemon`. Same for `ev`
+  (identifier com.erash11.maceverything.ev, no restart). On 2026-10-24 the kickstart killed the
+  old daemon mid-save (exit -9), launchd then reported last exit reason OS_REASON_CODESIGNING,
+  and the new daemon logged "starting" 18 s after the kickstart and ran fine.
 - No Swift toolchain in Claude cloud sessions: CI is the compiler. When the GitHub MCP is down,
   `curl https://api.github.com/repos/erash11/MacEverything/actions/runs` and
   `.../actions/jobs/<id>/logs` work without auth (public repo).

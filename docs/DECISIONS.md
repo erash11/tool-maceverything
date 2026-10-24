@@ -7,8 +7,8 @@ FUSE mount and OneDrive), `~/Library/Mobile Documents` (iCloud) and
 kept re-listing them and failing (Drive's `.tmp` folder, File Provider's `wharf/propagate`
 folders answering "Resource deadlock avoided"), which wrote about 27,000 "giving up" lines
 (5.5 MB) to `~/Library/Logs/everythingd.log` in eight days, and reading the Drive mount can hang.
-They held about 887K of the 4.1M entries. Opt back in per account with Locations > Add
-(`extraRoots`). Made in the 2026-10-24 agent-setup cleanup run ("stop everythingd crawling
+They held about 887K of the 4.1M entries. Opt back in per account with `extraRoots` in
+config.json (or Locations > Add, once the app is rebuilt with this change). Made in the 2026-10-24 agent-setup cleanup run ("stop everythingd crawling
 Drive"); the scope menu still lists the cloud accounts (see `docs/STATUS.md` Next).
 
 ## 2026-10-16: Keep building MacEverything (#9)
