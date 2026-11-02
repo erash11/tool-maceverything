@@ -237,20 +237,53 @@ final class MacTests: XCTestCase {
         service.flushSliceNow() // lists the root only; a, deep and empty are next
         XCTAssertEqual(service.foldersLeftToList, 3)
 
-        FileManager.default.createFile(atPath: dir + "/empty/fresh.txt", contents: nil)
+        // a/b/c is three folders below the top of the walk, so only its own event can list it now.
+        FileManager.default.createFile(atPath: dir + "/a/b/c/fresh.txt", contents: nil)
         XCTAssertEqual(count("fresh.txt"), 0)
-        service.receive([event(dir + "/empty/", id: before + 20)], root: dir)
+        service.receive([event(dir + "/a/b/c/", id: before + 20)], root: dir)
         service.flushSliceNow()
         XCTAssertEqual(count("fresh.txt"), 1, "a new change must not wait for the rescan")
-        XCTAssertGreaterThan(service.foldersLeftToList, 0, "the rescan is still under way")
+        XCTAssertEqual(service.foldersLeftToList, 3, "the rescan is still under way")
         XCTAssertLessThan(service.appliedEventId(for: dir) ?? 0, before + 10,
                           "the cursor must not pass the dropped events before the rescan is done")
 
+        // Dropped again: queued as a second pass, not a restart that could never finish.
+        service.receive([event("/", dropped: true, id: before + 30)], root: dir)
+        service.flushSliceNow()
+        XCTAssertEqual(service.passesWaiting, 1, "a restart would have dropped the first pass instead")
+        XCTAssertGreaterThan(service.foldersLeftToList, 0)
+
         service.sync()
         XCTAssertEqual(service.foldersLeftToList, 0)
-        XCTAssertGreaterThanOrEqual(service.appliedEventId(for: dir) ?? 0, before + 20)
+        XCTAssertEqual(service.passesWaiting, 0)
+        XCTAssertGreaterThanOrEqual(service.appliedEventId(for: dir) ?? 0, before + 30)
         XCTAssertEqual(count("two.pdf"), 1)
         XCTAssertEqual(count("\"path:/deep/d\""), 20)
+    }
+
+    /// A 5000-file delete overflows the FSEvents queue, so its own events are the dropped ones.
+    /// Folders that changed just before are listed first instead of minutes into the walk.
+    func testRecentlyChangedFoldersAreListedFirstAfterDroppedEvents() throws {
+        let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-recent.bin"))
+        service.start()
+        defer { service.stop() }
+        service.sliceSeconds = 0
+        service.continuesWalks = false
+        let before = service.appliedEventId(for: dir) ?? 0
+        func event(_ path: String, dropped: Bool = false, id: UInt64) -> Watcher.Event {
+            Watcher.Event(path: path, mustScanSubDirs: dropped, rootChanged: false, historyDone: false,
+                          dropped: dropped, id: id)
+        }
+        service.receive([event(dir + "/a/b/c/", id: before + 1)], root: dir)
+        service.flushSliceNow()
+
+        FileManager.default.createFile(atPath: dir + "/a/b/c/during-drop.txt", contents: nil)
+        service.receive([event("/", dropped: true, id: before + 2)], root: dir)
+        service.flushSliceNow() // one folder: the recently changed a/b/c, not the root
+        XCTAssertEqual(service.index.read { $0.search(Query.parse("during-drop")).total }, 1)
+        XCTAssertGreaterThan(service.foldersLeftToList, 0, "the walk of the root is still to come")
+        service.sync()
+        XCTAssertEqual(service.foldersLeftToList, 0)
     }
 
     func testOnlyNewRootsAreScannedOnLoad() throws {
