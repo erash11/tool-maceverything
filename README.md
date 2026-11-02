@@ -21,6 +21,20 @@ Needs Xcode or the Xcode Command Line Tools (`xcode-select --install`), macOS 13
 Then give `~/.local/bin/everythingd` Full Disk Access (the installer prints the steps) and run
 `ev --rescan`.
 
+### Install the app from CI (when it will not build locally)
+
+Command Line Tools without full Xcode cannot build the SwiftUI app (`SwiftUIMacros` missing).
+Every CI run uploads an ad-hoc signed `MacEverything.app` (Apple silicon, macOS 13+) as the
+`MacEverything-app` artifact. With `gh` logged in:
+
+```bash
+./scripts/install-app-from-ci.sh   # latest green run on main; pass a run ID to pick another
+```
+
+It replaces only `~/Applications/MacEverything.app`; `ev` and the daemon stay as built
+locally. Artifacts expire after 90 days: `gh workflow run CI -R erash11/MacEverything --ref main`
+makes a fresh one.
+
 ### Keep Full Disk Access across rebuilds (recommended, once per Mac)
 
 macOS ties Full Disk Access to the code signature. Ad-hoc signatures change with every build,
