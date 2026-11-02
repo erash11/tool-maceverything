@@ -4,7 +4,8 @@
 Run on the Mac with the daemon installed:  python3 -I scripts/parity_check.py
 Writes only under ~/MacEverything-paritytest (removed at the end). Exits 1 if any check fails.
 Bar: Everything shows a change "instantly"; here a change must show within LIVE_LIMIT seconds,
-and every search must answer within SPEED_LIMIT_MS (that includes ~15 ms to start `ev`).
+and each search's median of 5 runs must be within SPEED_LIMIT_MS and its slowest run within
+SPEED_MAX_MS (both include ~15 ms to start `ev`).
 """
 import os
 import shutil
@@ -12,30 +13,35 @@ import statistics
 import subprocess
 import sys
 import time
+import uuid
 
 EV = os.path.expanduser("~/.local/bin/ev")
 ROOT = os.path.expanduser("~/MacEverything-paritytest")
 LIVE_LIMIT = 5.0      # seconds
 WAIT_CAP = 60.0       # give up after this; a miss is a fail, the time shows how bad
-SPEED_LIMIT_MS = 100.0
+SPEED_LIMIT_MS = 100.0  # median of 5; starting `ev` adds jitter
+SPEED_MAX_MS = 250.0    # no single run may be slower than this
+EV_TIMEOUT = 10         # seconds per `ev` call, so a stuck daemon cannot hang the check
 BULK_SIZES = (50, 1000, 2500, 5000)
 BULK_REPEATS = 3      # the bulk miss seen on 2026-11-02 was intermittent
 QUERIES = ["report", "report 2026", "*.pdf", "ext:mp4;mov", "path:Football", "size:>1gb",
            "dm:thisweek", r"regex:^IMG_\d+", "video:", "report !temp:", "a", "e"]
 
 failures = []
-RUN = f"zq{os.getpid()}t{int(time.time())}"   # unique token in every test file name
-IN_ROOT = '"path:/maceverything-paritytest/"'  # every live query is limited to the test folder
+RUN = "zq" + uuid.uuid4().hex  # unique token in every test file name
 
 
 def count(query):
-    out = subprocess.run([EV, "--count", query], capture_output=True, text=True, check=True)
+    # A timeout raises out of live_checks(); main()'s finally still removes the test folder.
+    out = subprocess.run([EV, "--count", query], capture_output=True, text=True, check=True,
+                         timeout=EV_TIMEOUT)
     return int(out.stdout.strip())
 
 
 def q(name, folder=""):
-    """Query for test files whose name contains `name`, optionally only in ROOT/<folder>/."""
-    scope = f'"path:/maceverything-paritytest/{folder}/"' if folder else IN_ROOT
+    """Query for test files whose name contains `name`, under ROOT or ROOT/<folder>/ (substring
+    match, so ROOT/live/ also matches ROOT/live/sub/)."""
+    scope = f'"path:{ROOT}/{folder}/"' if folder else f'"path:{ROOT}/"'
     return f"{RUN}{name} {scope}"
 
 
@@ -75,7 +81,7 @@ def live_checks():
     check("rename one file", lambda: os.rename(a, b), [(q("_a"), 1, 0), (q("_b"), 0, 1)])
     os.makedirs(f"{d}/sub")
     check("move into a subfolder", lambda: os.rename(b, f"{d}/sub/{RUN}_b.txt"),
-          [(q("_b", "live/sub"), 0, 1)])
+          [(q("_b", "live/sub"), 0, 1), (q("_b"), 1, 1)])  # total stays 1: no stale old entry
     check("delete one file", lambda: os.remove(f"{d}/sub/{RUN}_b.txt"), [(q("_b"), 1, 0)])
     check("create a file to move with its folder", lambda: touch(f"{d}/{RUN}_c.txt"),
           [(q("_c", "live"), 0, 1)])
@@ -93,16 +99,16 @@ def live_checks():
 
 
 def speed_checks():
-    print(f"\nSearch speed, median of 5 (pass: under {SPEED_LIMIT_MS:.0f} ms)")
+    print(f"\nSearch speed (pass: median of 5 under {SPEED_LIMIT_MS:.0f} ms, slowest under {SPEED_MAX_MS:.0f} ms)")
     for q in ["zzzz-no-match-zzzz"] + QUERIES:
         times, hits = [], 0
         for _ in range(5):
             start = time.perf_counter()
             hits = count(q)
             times.append((time.perf_counter() - start) * 1000)
-        ms = statistics.median(times)
-        ok = ms <= SPEED_LIMIT_MS
-        print(f"{'ok  ' if ok else 'FAIL'} {q:42} {ms:6.1f} ms  {hits} hits")
+        ms, worst = statistics.median(times), max(times)
+        ok = ms <= SPEED_LIMIT_MS and worst <= SPEED_MAX_MS
+        print(f"{'ok  ' if ok else 'FAIL'} {q:42} {ms:6.1f} ms (slowest {worst:5.1f})  {hits} hits")
         if not ok:
             failures.append(f"speed: {q}")
 
