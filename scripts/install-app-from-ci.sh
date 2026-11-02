@@ -12,8 +12,17 @@ RUN_ID="${1:-$(gh run list -R "$REPO" -w CI -b main -s success -L 1 --json datab
 
 # Everything is staged in a private temp dir, the old app included while it is swapped out.
 # On any exit, put the old app back if the new one is not in place, then delete the temp dir.
+# shortcut: no lock against two installs at once, and a kill -9 mid-swap can strand the old app
+# in the temp dir; the bundle holds no user data and rerunning this restores it.
 WORK="$(mktemp -d)"
-trap '[ -e "$APP" ] || [ ! -e "$WORK/old.app" ] || mv "$WORK/old.app" "$APP"; rm -rf "$WORK"' EXIT
+cleanup() {
+  if [ ! -e "$APP" ] && [ -e "$WORK/old.app" ] && ! mv "$WORK/old.app" "$APP"; then
+    echo "Could not restore the old app; it is at $WORK/old.app" >&2
+    return
+  fi
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
 if ! gh run download "$RUN_ID" -R "$REPO" -n "$ARTIFACT" -D "$WORK/dl"; then
   echo "Run $RUN_ID has no $ARTIFACT artifact (artifacts expire after 90 days)." >&2
   echo "Start a new build: gh workflow run CI -R $REPO --ref main, then run this again." >&2
