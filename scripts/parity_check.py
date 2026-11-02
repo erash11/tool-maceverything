@@ -9,6 +9,7 @@ SPEED_MAX_MS (both include ~15 ms to start `ev`).
 """
 import os
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
@@ -100,7 +101,20 @@ def live_checks():
             check(f"delete {n} files at once (run {r})", lambda: shutil.rmtree(bd), [(q(name), n, 0)])
 
 
+def daemon_pid():
+    """The running daemon's pid. `ev --status` has no fallback: it fails when the daemon is down,
+    unlike searches, which quietly read the saved index file (Sources/ev/main.swift)."""
+    status = subprocess.run([EV, "--status"], capture_output=True, text=True, timeout=EV_TIMEOUT)
+    pid = subprocess.run(["pgrep", "-x", "everythingd"], capture_output=True, text=True).stdout.split()
+    return pid[0] if status.returncode == 0 and "ready: true" in status.stdout and len(pid) == 1 else None
+
+
 def speed_checks():
+    before = daemon_pid()
+    if before is None:
+        failures.append("speed: daemon not running or not ready, searches would read the saved index")
+        print("\nFAIL search speed skipped: daemon not running or not ready")
+        return
     print(f"\nSearch speed (pass: median of 5 under {SPEED_LIMIT_MS:.0f} ms, slowest under {SPEED_MAX_MS:.0f} ms)")
     for query in ["zzzz-no-match-zzzz"] + QUERIES:
         times, hits = [], 0
@@ -113,9 +127,16 @@ def speed_checks():
         print(f"{'ok  ' if ok else 'FAIL'} {query:42} {ms:6.1f} ms (slowest {worst:5.1f})  {hits} hits")
         if not ok:
             failures.append(f"speed: {query}")
+    # shortcut: checks the daemon before and after, not per search; a crash-and-restart between
+    # two searches would go unnoticed only if launchd gave it the same pid (not in practice).
+    if daemon_pid() != before:
+        failures.append("speed: daemon stopped or restarted during the speed checks")
 
 
 def main():
+    # SIGTERM normally kills Python without running finally blocks; turn it into SystemExit so the
+    # test folder is still removed. SIGKILL or power loss can still leave it (rerun says so).
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(143))
     if not os.access(EV, os.X_OK):
         sys.exit(f"{EV} not found; install MacEverything first")
     try:
