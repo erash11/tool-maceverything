@@ -38,8 +38,9 @@ picks up a config.json change on its own.
 | `report !temp:` (first search, builds the mask) | 43 ms; later searches only extend it |
 
 2026-11-02 check: daemon running, 0 "giving up" lines since the 10-24 restart, cloud scope
-still 0 entries, CI green. The menu-bar app was NOT running: it is not a login item, so it does
-not come back after a restart. Start it with `open ~/Applications/MacEverything.app`. The app
+still 0 entries, CI green. The menu-bar app was not running (it was never a login item). Fixed
+the same day: it is now a login item (System Settings > General > Login Items), and
+`scripts/install.sh` adds it if missing. The app
 still fails to build (same SwiftUIMacros error; Command Line Tools now Swift 6.4.2, no Xcode).
 The old Next #5 (delete codex branches, close #10) was already done.
 

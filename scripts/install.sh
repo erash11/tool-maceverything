@@ -50,6 +50,14 @@ for i in 1 2 3 4 5; do
 done
 open "$HOME/Applications/MacEverything.app"
 
+# Start the menu-bar app at login (launchd above only starts the daemon). The login item is
+# keyed by path, so the rm/cp above keeps it; add it only when it is missing.
+APP_PATH="$HOME/Applications/MacEverything.app"
+if ! osascript -e 'tell application "System Events" to get the path of every login item' 2>/dev/null | grep -qF "$APP_PATH"; then
+  osascript -e "tell application \"System Events\" to make login item at end with properties {path:\"$APP_PATH\", hidden:false}" >/dev/null \
+    || echo "Could not add the login item; add MacEverything in System Settings > General > Login Items." >&2
+fi
+
 cat <<MSG
 
 Installed.
