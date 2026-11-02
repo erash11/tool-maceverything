@@ -18,7 +18,16 @@ if ! gh run download "$RUN_ID" -R "$REPO" -n "$ARTIFACT" -D "$WORK/dl"; then
   exit 1
 fi
 ditto -x -k "$WORK/dl/MacEverything.app.zip" "$WORK/app"
-codesign --verify --deep --strict "$WORK/app/MacEverything.app"
+
+# Stage the new bundle next to the old one and verify it there, so a failed copy leaves the
+# installed app untouched. The swap below is a rename, so the app is a new file, never a rewrite.
+NEW="$HOME/Applications/.MacEverything.app.new"
+OLD="$HOME/Applications/.MacEverything.app.old"
+mkdir -p "$HOME/Applications"
+rm -rf "$NEW" "$OLD"
+ditto "$WORK/app/MacEverything.app" "$NEW"
+xattr -dr com.apple.quarantine "$NEW" 2>/dev/null || true
+codesign --verify --deep --strict "$NEW"
 
 # Quit the running app before replacing it (only if running, so osascript does not launch it).
 if pgrep -xq MacEverything; then
@@ -27,14 +36,19 @@ if pgrep -xq MacEverything; then
     pgrep -xq MacEverything || break
     sleep 0.5
   done
+  if pgrep -xq MacEverything; then
+    echo "MacEverything did not quit; quit it from the menu bar and run this again." >&2
+    exit 1
+  fi
 fi
 
-# rm first, so the copy is a new bundle rather than a rewrite of the old one. The login item
-# is keyed by this path, so it keeps working.
-mkdir -p "$HOME/Applications"
-rm -rf "$APP"
-ditto "$WORK/app/MacEverything.app" "$APP"
-xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
-codesign --verify --deep --strict "$APP"
+# The login item is keyed by this path, so it keeps working.
+if [ -e "$APP" ]; then mv "$APP" "$OLD"; fi
+if ! mv "$NEW" "$APP"; then
+  if [ -e "$OLD" ]; then mv "$OLD" "$APP"; fi
+  echo "Could not move the new app into place; the old one is back." >&2
+  exit 1
+fi
+rm -rf "$OLD"
 open "$APP"
 echo "Installed $APP from CI run $RUN_ID (https://github.com/$REPO/actions/runs/$RUN_ID)."
