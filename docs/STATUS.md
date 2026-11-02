@@ -37,6 +37,12 @@ picks up a config.json change on its own.
 | `video:`, `doc: report` | 16 to 22 ms |
 | `report !temp:` (first search, builds the mask) | 43 ms; later searches only extend it |
 
+2026-11-02 check: daemon running, 0 "giving up" lines since the 10-24 restart, cloud scope
+still 0 entries, CI green. The menu-bar app was NOT running: it is not a login item, so it does
+not come back after a restart. Start it with `open ~/Applications/MacEverything.app`. The app
+still fails to build (same SwiftUIMacros error; Command Line Tools now Swift 6.4.2, no Xcode).
+The old Next #5 (delete codex branches, close #10) was already done.
+
 ## Next
 1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
    location; `SearchScope.choices` lists every ~/Library/CloudStorage folder today. Small change
@@ -47,8 +53,7 @@ picks up a config.json change on its own.
 3. On the Mac: Locations window (menu bar > Locations…), live updates (create, rename, delete a
    file and check `ev`), unplug and replug CRASHBOX. Rest of the #2 checklist.
 4. Post the real-Mac numbers on #3 and close it (GitHub MCP was down at the end of 2026-10-16).
-5. Delete the `codex-review` and `codex-review-base` branches on GitHub, close #10.
-6. Optional: folders that each take exactly 6.0 s to list (once OneDrive; in the 2026-10-24
+5. Optional: folders that each take exactly 6.0 s to list (once OneDrive; in the 2026-10-24
    scan, sandbox folders under ~/Library/Containers); Type column sorting.
 
 ## Open questions
