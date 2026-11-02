@@ -95,8 +95,6 @@ public final class IndexService {
     private var walk: [Scanner.PendingFolder] = []
     /// Highest event id per root taken into `walk`; applied only once the walk is done.
     private var walkEventIds: [String: UInt64] = [:]
-    /// Changed paths taken into `walk`, for clearing their retry counts.
-    private var walkPaths = Set<String>()
     /// Folders that failed to list during the walk, one entry each (the latest attempt).
     private var walkFailures: [String: Scanner.RefreshFailure] = [:]
     private var walkStarted: Date?
@@ -112,8 +110,9 @@ public final class IndexService {
     private var recentlyChanged: [String: Date] = [:]
     /// How long one flush lists folders before letting newer changes in. 0 lists one folder.
     var sliceSeconds = 0.25
-    /// Tests turn this off to list an unfinished walk one `flushSliceNow()` at a time.
-    var continuesWalks = true
+    /// Tests set this before `start()`: no FSEvents watchers and no automatic flushes, so
+    /// changes are applied only by `flushSliceNow()` (one slice) or `sync()`.
+    var stepsByHand = false
     static let maxRetries = 3
     /// Held while loading or scanning, so only one runs and `watchers` has one writer.
     private let lifecycle = NSLock()
@@ -346,6 +345,7 @@ public final class IndexService {
 
     /// Caller holds `lifecycle`.
     private func startWatcher(_ root: String, since: UInt64?) {
+        if stepsByHand { return }
         watchers.filter { $0.root == root }.forEach { $0.stop() }
         watchers.removeAll { $0.root == root }
         let w = Watcher(root: root) { [weak self] events in
@@ -378,7 +378,8 @@ public final class IndexService {
                 if p != root && self.isExcluded(p) { continue }
                 self.pendingPaths[p] = (self.pendingPaths[p] ?? false) || recursive
             }
-            if !self.flushScheduled && (!self.pendingPaths.isEmpty || !self.pendingEventIds.isEmpty) {
+            if !self.stepsByHand && !self.flushScheduled
+                && (!self.pendingPaths.isEmpty || !self.pendingEventIds.isEmpty) {
                 self.flushScheduled = true
                 self.work.asyncAfter(deadline: .now() + 0.2) { self.flush() }
             }
@@ -455,7 +456,12 @@ public final class IndexService {
                 let end = Date().addingTimeInterval(sliceSeconds)
                 let failed = scanner.refreshFailures(index, queue: &walk,
                                                      cancelled: { self.locked { self._replacing } },
-                                                     yield: { !drain && Date() >= end })
+                                                     yield: { !drain && Date() >= end },
+                                                     handled: { path in
+                                                         // Listed fine: an earlier failure is over.
+                                                         self.walkFailures[path] = nil
+                                                         self.retries[path] = nil
+                                                     })
                 for f in failed {
                     var latest = f
                     latest.recursive = f.recursive || (walkFailures[f.path]?.recursive ?? false)
@@ -473,7 +479,7 @@ public final class IndexService {
         if !walk.isEmpty || !nextPass.isEmpty {
             // Unfinished: the event ids stay held, so a save never claims the rest is applied.
             // Changes queued behind this block are taken in by the next slice, ahead of the walk.
-            if continuesWalks {
+            if !stepsByHand {
                 flushScheduled = true
                 work.async { self.flush() }
             }
@@ -502,7 +508,6 @@ public final class IndexService {
             guard let dir = id, idx.records[Int(dir)].isDirectory else { return nil }
             return (target, dir, recursive)
         }
-        walkPaths.insert(path)
         guard let (target, dir, recursive) = resolved else { return }
         if roots.contains(target) && !FileManager.default.fileExists(atPath: target) {
             offlineRoots.insert(target) // a drive was unplugged; rescanned when it returns
@@ -512,7 +517,10 @@ public final class IndexService {
             func covers(_ outer: String, _ inner: String) -> Bool {
                 rootFor(inner) == root && (outer == root || inner == outer || inner.hasPrefix(outer + "/"))
             }
-            if walkTargets.contains(where: { covers($0, target) }) {
+            if walkTargets.contains(target) {
+                // The same walk again (events dropped again): restarting it each time could
+                // keep it from ever finishing, so it runs once more after this pass. A folder
+                // below a walk under way goes on top instead, like any change.
                 nextPass[target] = true
             } else {
                 // This walk covers whatever is queued below it, so it replaces those entries.
@@ -540,7 +548,6 @@ public final class IndexService {
         }
         let failures = Array(walkFailures.values)
         var failedRoots = Set<String>()
-        for path in walkPaths where !failures.contains(where: { $0.path == path }) { retries[path] = nil }
         // Retry only the folders that failed, not the whole request: a volume-wide refresh
         // with one unreadable folder in it would otherwise re-list millions of entries.
         for f in failures {
@@ -567,7 +574,7 @@ public final class IndexService {
         }
         resetWalk()
         // Its own flag, so a retry waiting 5 s never delays a fresh change's 0.2 s flush.
-        if !pendingPaths.isEmpty && !retryScheduled {
+        if !pendingPaths.isEmpty && !retryScheduled && !stepsByHand {
             retryScheduled = true
             work.asyncAfter(deadline: .now() + 5) {
                 self.retryScheduled = false
@@ -579,7 +586,6 @@ public final class IndexService {
     private func resetWalk() {
         walk = []
         walkEventIds = [:]
-        walkPaths = []
         walkFailures = [:]
         walkStarted = nil
         walkTargets = []

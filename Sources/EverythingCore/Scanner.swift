@@ -292,12 +292,15 @@ public struct Scanner {
     /// Lists the folders in `queue`, last first, adding the ones below them as it goes. When
     /// `yield` returns true after a folder, it stops and leaves the rest in `queue`, so a long
     /// walk (a whole volume, after FSEvents dropped events) can let newer changes go first.
-    /// At least one folder is listed per call. Cancelling empties `queue`.
+    /// At least one folder is listed per call. Cancelling empties `queue`. `handled` gets each
+    /// folder that did not fail, so the caller can forget an earlier failure of it.
     public func refreshFailures(_ shared: SharedIndex, queue: inout [PendingFolder],
                                 cancelled: () -> Bool = { false },
-                                yield: () -> Bool = { false }) -> [RefreshFailure] {
+                                yield: () -> Bool = { false },
+                                handled: (String) -> Void = { _ in }) -> [RefreshFailure] {
         var failures: [RefreshFailure] = []
         while let (p, id, deep) = queue.popLast() {
+            let failedBefore = failures.count
             if cancelled() {
                 queue = []
                 return []
@@ -336,6 +339,10 @@ public struct Scanner {
                     out.append((kidPath, kid, true))
                 }
                 return out
+            }
+            if failures.count == failedBefore {
+                if !failures.isEmpty { failures.removeAll { $0.path == p } }
+                handled(p)
             }
             queue.append(contentsOf: next)
             if !queue.isEmpty && yield() { break }

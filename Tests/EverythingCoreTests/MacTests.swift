@@ -222,10 +222,10 @@ final class MacTests: XCTestCase {
             try FileManager.default.createDirectory(atPath: dir + "/deep/d\(i)", withIntermediateDirectories: true)
         }
         let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-walk.bin"))
+        service.sliceSeconds = 0 // one folder per slice
+        service.stepsByHand = true // only the events below, listed slice by slice
         service.start()
         defer { service.stop() }
-        service.sliceSeconds = 0 // one folder per slice
-        service.continuesWalks = false // this test lists the walk slice by slice
         let before = service.appliedEventId(for: dir) ?? 0
         func event(_ path: String, dropped: Bool = false, id: UInt64) -> Watcher.Event {
             Watcher.Event(path: path, mustScanSubDirs: dropped, rootChanged: false, historyDone: false,
@@ -247,6 +247,16 @@ final class MacTests: XCTestCase {
         XCTAssertLessThan(service.appliedEventId(for: dir) ?? 0, before + 10,
                           "the cursor must not pass the dropped events before the rescan is done")
 
+        // FSEvents asks for a subtree scan of a/b: listed now, not after the whole walk.
+        FileManager.default.createFile(atPath: dir + "/a/b/c/subtree.txt", contents: nil)
+        service.receive([Watcher.Event(path: dir + "/a/b/", mustScanSubDirs: true, rootChanged: false,
+                                       historyDone: false, id: before + 25)], root: dir)
+        service.flushSliceNow() // lists a/b
+        service.flushSliceNow() // lists a/b/c
+        XCTAssertEqual(count("subtree.txt"), 1)
+        XCTAssertEqual(service.passesWaiting, 0)
+        XCTAssertEqual(service.foldersLeftToList, 3, "the root walk is still under way")
+
         // Dropped again: queued as a second pass, not a restart that could never finish.
         service.receive([event("/", dropped: true, id: before + 30)], root: dir)
         service.flushSliceNow()
@@ -265,10 +275,10 @@ final class MacTests: XCTestCase {
     /// Folders that changed just before are listed first instead of minutes into the walk.
     func testRecentlyChangedFoldersAreListedFirstAfterDroppedEvents() throws {
         let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-recent.bin"))
+        service.sliceSeconds = 0
+        service.stepsByHand = true
         service.start()
         defer { service.stop() }
-        service.sliceSeconds = 0
-        service.continuesWalks = false
         let before = service.appliedEventId(for: dir) ?? 0
         func event(_ path: String, dropped: Bool = false, id: UInt64) -> Watcher.Event {
             Watcher.Event(path: path, mustScanSubDirs: dropped, rootChanged: false, historyDone: false,
