@@ -24,6 +24,8 @@ QUERIES = ["report", "report 2026", "*.pdf", "ext:mp4;mov", "path:Football", "si
            "dm:thisweek", r"regex:^IMG_\d+", "video:", "report !temp:", "a", "e"]
 
 failures = []
+RUN = f"zq{os.getpid()}t{int(time.time())}"   # unique token in every test file name
+IN_ROOT = '"path:/maceverything-paritytest/"'  # every live query is limited to the test folder
 
 
 def count(query):
@@ -31,15 +33,30 @@ def count(query):
     return int(out.stdout.strip())
 
 
-def wait_for(label, query, want):
+def q(name, folder=""):
+    """Query for test files whose name contains `name`, optionally only in ROOT/<folder>/."""
+    scope = f'"path:/maceverything-paritytest/{folder}/"' if folder else IN_ROOT
+    return f"{RUN}{name} {scope}"
+
+
+def check(label, change, expect):
+    """expect: [(query, count before, count after)]. Confirms the before counts, starts the clock,
+    runs change(), and requires every after count within LIVE_LIMIT of that one start time."""
+    wrong = [(qq, b, count(qq)) for qq, b, _ in expect if count(qq) != b]
+    if wrong:
+        print(f"FAIL {label:42}   bad start: " + "; ".join(f"{qq} is {g}, want {b}" for qq, b, g in wrong))
+        failures.append(label)
+        return
     start = time.monotonic()
-    got = count(query)
-    while got != want and time.monotonic() - start < WAIT_CAP:
-        time.sleep(0.1)
-        got = count(query)
+    change()
+    pending = list(expect)
+    while pending and time.monotonic() - start < WAIT_CAP:
+        pending = [e for e in pending if count(e[0]) != e[2]]
+        if pending:
+            time.sleep(0.1)
     took = time.monotonic() - start
-    ok = got == want and took <= LIVE_LIMIT
-    note = "" if got == want else f"  (still {got}, want {want})"
+    ok = not pending and took <= LIVE_LIMIT
+    note = "".join(f"  (still {count(qq)}, want {a}: {qq})" for qq, _, a in pending)
     print(f"{'ok  ' if ok else 'FAIL'} {label:42} {took:5.1f} s{note}")
     if not ok:
         failures.append(label)
@@ -50,35 +67,29 @@ def touch(path):
 
 
 def live_checks():
-    print(f"Live updates (pass: seen within {LIVE_LIMIT:.0f} s)")
-    tok = f"zqparity{int(time.time())}"
+    print(f"Live updates (pass: seen within {LIVE_LIMIT:.0f} s, timed from the file change)")
     d = os.path.join(ROOT, "live")
     os.makedirs(d)
-    a, b = f"{d}/{tok}_a.txt", f"{d}/{tok}_b.txt"
-    touch(a)
-    wait_for("create one file", f"{tok}_a", 1)
-    os.rename(a, b)
-    wait_for("rename: old name gone", f"{tok}_a", 0)
-    wait_for("rename: new name found", f"{tok}_b", 1)
+    a, b = f"{d}/{RUN}_a.txt", f"{d}/{RUN}_b.txt"
+    check("create one file", lambda: touch(a), [(q("_a"), 0, 1)])
+    check("rename one file", lambda: os.rename(a, b), [(q("_a"), 1, 0), (q("_b"), 0, 1)])
     os.makedirs(f"{d}/sub")
-    os.rename(b, f"{d}/sub/{tok}_b.txt")
-    wait_for("move into a subfolder", f'{tok}_b "path:/live/sub/"', 1)
-    os.remove(f"{d}/sub/{tok}_b.txt")
-    wait_for("delete one file", f"{tok}_b", 0)
-    os.rename(d, d + "2")
-    touch(f"{d}2/{tok}_c.txt")
-    wait_for("rename the parent folder", f'{tok}_c "path:/live2/"', 1)
+    check("move into a subfolder", lambda: os.rename(b, f"{d}/sub/{RUN}_b.txt"),
+          [(q("_b", "live/sub"), 0, 1)])
+    check("delete one file", lambda: os.remove(f"{d}/sub/{RUN}_b.txt"), [(q("_b"), 1, 0)])
+    check("create a file to move with its folder", lambda: touch(f"{d}/{RUN}_c.txt"),
+          [(q("_c", "live"), 0, 1)])
+    check("rename the parent folder", lambda: os.rename(d, d + "2"),
+          [(q("_c", "live"), 1, 0), (q("_c", "live2"), 0, 1)])
 
     for n in BULK_SIZES:
         for r in range(1, BULK_REPEATS + 1):
             bd = os.path.join(ROOT, f"bulk{n}_{r}")
+            name = f"_bulk{n}r{r}_"
             os.makedirs(bd)
-            btok = f"zqbulk{n}r{r}t{int(time.time())}"
-            for i in range(n):
-                touch(f"{bd}/{btok}_{i}.dat")
-            wait_for(f"create {n} files at once (run {r})", btok, n)
-            shutil.rmtree(bd)
-            wait_for(f"delete {n} files at once (run {r})", btok, 0)
+            check(f"create {n} files at once (run {r})",
+                  lambda: [touch(f"{bd}/{RUN}{name}{i}.dat") for i in range(n)], [(q(name), 0, n)])
+            check(f"delete {n} files at once (run {r})", lambda: shutil.rmtree(bd), [(q(name), n, 0)])
 
 
 def speed_checks():
@@ -99,13 +110,19 @@ def speed_checks():
 def main():
     if not os.access(EV, os.X_OK):
         sys.exit(f"{EV} not found; install MacEverything first")
-    if os.path.exists(ROOT):
+    try:
+        os.makedirs(ROOT)  # fails if it exists, so the cleanup below only ever removes our own folder
+    except FileExistsError:
         sys.exit(f"{ROOT} already exists; remove it first (left by an interrupted run?)")
-    os.makedirs(ROOT)
     try:
         live_checks()
     finally:
-        shutil.rmtree(ROOT, ignore_errors=True)
+        try:
+            shutil.rmtree(ROOT)
+        except OSError as err:
+            failures.append(f"cleanup: {err}")
+        if os.path.exists(ROOT):
+            failures.append(f"cleanup: {ROOT} still exists")
     speed_checks()
     print(f"\n{len(failures)} failed" + (": " + "; ".join(failures) if failures else ""))
     sys.exit(1 if failures else 0)

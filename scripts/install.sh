@@ -51,11 +51,22 @@ done
 open "$HOME/Applications/MacEverything.app"
 
 # Start the menu-bar app at login (launchd above only starts the daemon). The login item is
-# keyed by path, so the rm/cp above keeps it; add it only when it is missing.
-APP_PATH="$HOME/Applications/MacEverything.app"
-if ! osascript -e 'tell application "System Events" to get the path of every login item' 2>/dev/null | grep -qF "$APP_PATH"; then
-  osascript -e "tell application \"System Events\" to make login item at end with properties {path:\"$APP_PATH\", hidden:false}" >/dev/null \
-    || echo "Could not add the login item; add MacEverything in System Settings > General > Login Items." >&2
+# keyed by path, so the rm/cp above keeps it. Exact path match; the path goes in as an argument,
+# not into the script text. If the list cannot be read, the script errors before adding anything.
+if ! osascript - "$HOME/Applications/MacEverything.app" >/dev/null <<'APPLESCRIPT'
+on run argv
+  set appPath to item 1 of argv
+  tell application "System Events"
+    repeat with loginItem in login items
+      if (path of loginItem as text) is appPath then return "present"
+    end repeat
+    make login item at end with properties {path:appPath, hidden:false}
+  end tell
+  return "added"
+end run
+APPLESCRIPT
+then
+  echo "Could not check or add the login item; add MacEverything in System Settings > General > Login Items." >&2
 fi
 
 cat <<MSG
