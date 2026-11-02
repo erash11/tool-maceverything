@@ -213,6 +213,46 @@ final class MacTests: XCTestCase {
         service.stop()
     }
 
+    /// When FSEvents drops events the whole root is re-listed, which took minutes on a 2.6M-entry
+    /// Mac and blocked every later change until it finished (2026-11-02: a new file showed
+    /// after 81 s). Newer changes must be listed ahead of that walk, and the saved cursor must
+    /// stay behind the drop until the walk is done.
+    func testChangesAreListedAheadOfAWholeRootRescan() throws {
+        for i in 0..<20 {
+            try FileManager.default.createDirectory(atPath: dir + "/deep/d\(i)", withIntermediateDirectories: true)
+        }
+        let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-walk.bin"))
+        service.start()
+        defer { service.stop() }
+        service.sliceSeconds = 0 // one folder per slice
+        service.continuesWalks = false // this test lists the walk slice by slice
+        let before = service.appliedEventId(for: dir) ?? 0
+        func event(_ path: String, dropped: Bool = false, id: UInt64) -> Watcher.Event {
+            Watcher.Event(path: path, mustScanSubDirs: dropped, rootChanged: false, historyDone: false,
+                          dropped: dropped, id: id)
+        }
+        func count(_ q: String) -> Int { service.index.read { $0.search(Query.parse(q)).total } }
+
+        service.receive([event("/", dropped: true, id: before + 10)], root: dir)
+        service.flushSliceNow() // lists the root only; a, deep and empty are next
+        XCTAssertEqual(service.foldersLeftToList, 3)
+
+        FileManager.default.createFile(atPath: dir + "/empty/fresh.txt", contents: nil)
+        XCTAssertEqual(count("fresh.txt"), 0)
+        service.receive([event(dir + "/empty/", id: before + 20)], root: dir)
+        service.flushSliceNow()
+        XCTAssertEqual(count("fresh.txt"), 1, "a new change must not wait for the rescan")
+        XCTAssertGreaterThan(service.foldersLeftToList, 0, "the rescan is still under way")
+        XCTAssertLessThan(service.appliedEventId(for: dir) ?? 0, before + 10,
+                          "the cursor must not pass the dropped events before the rescan is done")
+
+        service.sync()
+        XCTAssertEqual(service.foldersLeftToList, 0)
+        XCTAssertGreaterThanOrEqual(service.appliedEventId(for: dir) ?? 0, before + 20)
+        XCTAssertEqual(count("two.pdf"), 1)
+        XCTAssertEqual(count("\"path:/deep/d\""), 20)
+    }
+
     func testOnlyNewRootsAreScannedOnLoad() throws {
         let other = dir + "-other"
         try FileManager.default.createDirectory(atPath: other, withIntermediateDirectories: true)
