@@ -55,11 +55,13 @@ def check(label, change, expect):
         return
     start = time.monotonic()
     change()
-    pending = list(expect)
-    while pending and time.monotonic() - start < WAIT_CAP:
-        pending = [e for e in pending if count(e[0]) != e[2]]
-        if pending:
-            time.sleep(0.1)
+    # Re-check every expectation on each poll: all must hold in the same poll (a move whose old
+    # entry lingers can satisfy "total is 1" before the new entry appears, then break it).
+    while True:
+        pending = [e for e in expect if count(e[0]) != e[2]]
+        if not pending or time.monotonic() - start >= WAIT_CAP:
+            break
+        time.sleep(0.1)
     took = time.monotonic() - start
     ok = not pending and took <= LIVE_LIMIT
     note = "".join(f"  (still {count(qq)}, want {a}: {qq})" for qq, _, a in pending)
@@ -100,17 +102,17 @@ def live_checks():
 
 def speed_checks():
     print(f"\nSearch speed (pass: median of 5 under {SPEED_LIMIT_MS:.0f} ms, slowest under {SPEED_MAX_MS:.0f} ms)")
-    for q in ["zzzz-no-match-zzzz"] + QUERIES:
+    for query in ["zzzz-no-match-zzzz"] + QUERIES:
         times, hits = [], 0
         for _ in range(5):
             start = time.perf_counter()
-            hits = count(q)
+            hits = count(query)
             times.append((time.perf_counter() - start) * 1000)
         ms, worst = statistics.median(times), max(times)
         ok = ms <= SPEED_LIMIT_MS and worst <= SPEED_MAX_MS
-        print(f"{'ok  ' if ok else 'FAIL'} {q:42} {ms:6.1f} ms (slowest {worst:5.1f})  {hits} hits")
+        print(f"{'ok  ' if ok else 'FAIL'} {query:42} {ms:6.1f} ms (slowest {worst:5.1f})  {hits} hits")
         if not ok:
-            failures.append(f"speed: {q}")
+            failures.append(f"speed: {query}")
 
 
 def main():
