@@ -6,9 +6,7 @@
   selection still among the results) and moves focus to the list (AppKit makeFirstResponder;
   @FocusState did nothing on a second visit, seen live). Waits for current results; Return in the
   box also waits and opens only current rows. App installed from CI run 41697754145 (main 0b4b385).
-  Codex: 5 rounds, approved. Live: first Down moved focus box -> list (Accessibility check);
-  the full Down, Down, Return on the final build is NOT yet checked (other apps held the front;
-  keys are sent only while the panel is in front). Lesson: when the panel isn't frontmost,
+  Codex: 5 rounds, approved. Live: confirmed working by Eric on the installed build (2026-11-03). Lesson: when the panel isn't frontmost,
   System Events keys go to the front app (they landed in Ghostty once, no Return sent).
 - MERGED #20 (gap 5, was Next b2): fast Path/Size/Date sorts. Path: a cached path order (folder
   first, then names: `/a/z` before `/a b`, a change from text order), rebuilt only when records
