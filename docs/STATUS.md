@@ -2,6 +2,15 @@
 
 ## Current state
 **2026-11-03 (read first):**
+- MERGED #22: sort by Type and Extension (daemon keys `type`, `extension`; app columns sortable;
+  the Type and Extension columns now show the text the daemon sorts by, from public
+  `FileKinds.kindName`/`extensionName`). Keys are worked out as the heap reads them (memory
+  O(rows asked for)). Live through the daemon, `a` (1.6M matches), warm: type 45 ms, extension
+  62 ms, size 23 ms (the first type sort after a start pays the kind cache build). Installed:
+  daemon/ev from `main` 0aecf37 (backups `*.pre-typesort-2026-11-03`), app from CI run
+  41711460748. Codex: 3 rounds, approved. Header click in the app NOT checked live (the panel
+  can't be opened by Accessibility: the menu item press doesn't open it); Eric to check.
+  Note: the Mac's load average hit 140 this afternoon from other apps; timings then were 5x slow.
 - MERGED #21 (gap 3, was Next c): Down Arrow in the search box selects the first row (keeps a
   selection still among the results) and moves focus to the list (AppKit makeFirstResponder;
   @FocusState did nothing on a second visit, seen live). Waits for current results; Return in the
@@ -143,7 +152,7 @@ The old Next #5 (delete codex branches, close #10) was already done.
 ## Next
 0. Next PARITY gaps (brief Codex with the existing bounds and that case-sensitive-volume edge
    cases past them are out of scope, or it runs 7+ rounds again, as #17 and #18 did):
-   sort by Type/Extension; Up Arrow from the top row back to the box; an incremental
+   Up Arrow from the top row back to the box; Ctrl+1..9 sort shortcuts; an incremental
    path-order merge if the ~0.2 s rebuild under churn shows up in use. Then the smaller items in the
    2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
 1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
