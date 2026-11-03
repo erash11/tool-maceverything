@@ -67,8 +67,14 @@ public struct Query {
         // Every word is at least one term, so past maxExpandedTerms words the query can't fit:
         // stop before reading any of them (each regex: word compiles a regex to check it).
         var words = 0
-        for case .word(_) in tokens { words += 1 }
-        if words > maxExpandedTerms { return Query(groups: [[.invalid(text)]]) }
+        // Distinct regex patterns too, before parseTerm compiles any (it strips one "!", as here).
+        var patterns = Set<Substring>()
+        for case let .word(w) in tokens {
+            words += 1
+            let body = w.hasPrefix("!") && w.count > 1 ? w.dropFirst() : w[...]
+            if body.prefix(6).lowercased() == "regex:" { patterns.insert(body.dropFirst(6)) }
+        }
+        if words > maxExpandedTerms || patterns.count > maxDistinctRegexes { return Query(groups: [[.invalid(text)]]) }
         for token in tokens {
             switch token {
             case .or:
@@ -302,8 +308,10 @@ public struct Query {
             return .length(cmp, n, negated: negated)
         }
         if lower.hasPrefix("ext:") {
-            let exts = lower.dropFirst(4).split(separator: ";").map { Array(("." + $0).utf8) }
-            return exts.isEmpty ? .invalid(raw) : .ext(exts, negated: negated)
+            // Split no further than the test budget allows: one more piece means the list is too long.
+            let parts = lower.dropFirst(4).split(separator: ";", maxSplits: maxTestsPerRecord)
+            guard !parts.isEmpty, parts.count <= maxTestsPerRecord else { return .invalid(raw) }
+            return .ext(parts.map { Array(("." + $0).utf8) }, negated: negated)
         }
         if lower.hasPrefix("drive:") {
             // drive:CRASHBOX means everything under /Volumes/CRASHBOX.

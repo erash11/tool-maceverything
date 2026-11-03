@@ -336,7 +336,16 @@ final class IndexTests: XCTestCase {
         _ = Query.parse("<regex:" + String(repeating: ">", count: 60_000))
         _ = Query.parse("<" + String(repeating: "!", count: 30_000) + String(repeating: ">", count: 30_000))
         _ = Query.parse("<size" + String(repeating: ">", count: 60_000))
+        // Refused before the work: a huge ext: list is split only to 257 pieces, and 4,000 regex words
+        // are counted before any is compiled.
+        let hugeExt = "ext:" + (1...60_000).map { "e\($0)" }.joined(separator: ";")
+        XCTAssertEqual(Query.parse(hugeExt).groups, [[.invalid(hugeExt)]])
+        let manyRegexes = (1...4000).map { "regex:x\($0)" }.joined(separator: " ")
+        XCTAssertEqual(Query.parse(manyRegexes).groups, [[.invalid(manyRegexes)]])
         XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        // One pattern repeated counts once.
+        let sameRegex = Array(repeating: "regex:x", count: 40).joined(separator: " | ")
+        XCTAssertNotEqual(Query.parse(sameRegex).groups, [[.invalid(sameRegex)]])
     }
 
     func testSizeNamesAndRanges() {
