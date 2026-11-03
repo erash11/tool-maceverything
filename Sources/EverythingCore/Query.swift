@@ -18,6 +18,9 @@ public struct Query {
         case foldersOnly
         /// Temp and generated files, and everything inside temp folders (see TempFiles).
         case temp(negated: Bool)
+        /// A filter whose value can't be read (`size:huge`, `dm:lastweek`, `ext:`). Matches nothing,
+        /// even negated: skipping it would turn the search into "everything".
+        case invalid(String)
     }
 
     public enum Comparison: Equatable { case less, lessOrEqual, greater, greaterOrEqual, equal }
@@ -35,7 +38,7 @@ public struct Query {
                 joinNext = !groups.isEmpty
                 continue
             }
-            guard let term = parseTerm(token, now: now, calendar: calendar) else { continue }
+            let term = parseTerm(token, now: now, calendar: calendar)
             if joinNext, !groups.isEmpty {
                 groups[groups.count - 1].append(term)
             } else {
@@ -71,7 +74,7 @@ public struct Query {
         return tokens
     }
 
-    static func parseTerm(_ raw: String, now: Date, calendar: Calendar) -> Term? {
+    static func parseTerm(_ raw: String, now: Date, calendar: Calendar) -> Term {
         var token = raw
         var negated = false
         if token.hasPrefix("!") && token.count > 1 {
@@ -89,29 +92,29 @@ public struct Query {
         }
         if lower.hasPrefix("ext:") {
             let exts = lower.dropFirst(4).split(separator: ";").map { Array(("." + $0).utf8) }
-            return exts.isEmpty ? nil : .ext(exts, negated: negated)
+            return exts.isEmpty ? .invalid(raw) : .ext(exts, negated: negated)
         }
         if lower.hasPrefix("drive:") {
             // drive:CRASHBOX means everything under /Volumes/CRASHBOX.
             let name = lower.dropFirst(6).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            return name.isEmpty ? nil : .pathContains(Array("/volumes/\(name)/".utf8), negated: negated)
+            return name.isEmpty ? .invalid(raw) : .pathContains(Array("/volumes/\(name)/".utf8), negated: negated)
         }
         if lower.hasPrefix("path:") {
             let value = String(lower.dropFirst(5))
-            return value.isEmpty ? nil : .pathContains(Array(value.utf8), negated: negated)
+            return value.isEmpty ? .invalid(raw) : .pathContains(Array(value.utf8), negated: negated)
         }
         if lower.hasPrefix("regex:") {
             let pattern = String(token.dropFirst(6))
-            return pattern.isEmpty ? nil : .regex(pattern, negated: negated)
+            return pattern.isEmpty ? .invalid(raw) : .regex(pattern, negated: negated)
         }
         if lower.hasPrefix("size:") {
             let (cmp, rest) = comparison(String(lower.dropFirst(5)))
-            guard let bytes = parseSize(rest) else { return nil }
+            guard let bytes = parseSize(rest) else { return .invalid(raw) }
             return .size(cmp, bytes, negated: negated)
         }
         if lower.hasPrefix("dm:") {
             let (cmp, rest) = comparison(String(lower.dropFirst(3)))
-            guard let (start, end) = parseDay(rest, now: now, calendar: calendar) else { return nil }
+            guard let (start, end) = parseDay(rest, now: now, calendar: calendar) else { return .invalid(raw) }
             return .modified(cmp, start, end, negated: negated)
         }
         if lower.contains("*") || lower.contains("?") {

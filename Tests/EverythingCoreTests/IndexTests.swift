@@ -136,7 +136,21 @@ final class IndexTests: XCTestCase {
         for q in ["size:nanb", "size:infgb", "size:1e999b", "size:-5kb", "dm:99999999-1-1", "regex:([", "ext:", "path:"] {
             _ = index.search(Query.parse(q))
         }
-        XCTAssertTrue(Query.parse("size:nanb").isEmpty)
+        XCTAssertEqual(index.search(Query.parse("size:nanb")).total, 0)
+    }
+
+    func testUnreadableFilterMatchesNothing() {
+        // Skipping these used to leave an empty query, which matched every file.
+        let index = makeIndex()
+        XCTAssertEqual(index.search(Query.parse("")).total, 7)
+        for q in ["dm:lastweek", "dm:2026-10-01..2026-10-15", "size:10mb..50mb", "size:huge",
+                  "ext:", "path:", "drive:", "regex:", "!size:huge", "!dm:lastweek",
+                  "report dm:nonsense", "report | size:huge", "size:huge | dm:nonsense"] {
+            let r = index.search(Query.parse(q))
+            XCTAssertEqual(r.total, q.hasPrefix("report |") ? 3 : 0, q)
+        }
+        XCTAssertEqual(Query.parse("size:huge").groups, [[.invalid("size:huge")]])
+        XCTAssertEqual(Query.parse("!dm:lastweek").groups, [[.invalid("!dm:lastweek")]])
     }
 
     func testNegatedFilters() {

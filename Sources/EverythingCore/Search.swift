@@ -49,7 +49,7 @@ struct CompiledQuery {
     enum Kind {
         static let contains: UInt8 = 0, path: UInt8 = 1, glob: UInt8 = 2, regex: UInt8 = 3, ext: UInt8 = 4
         static let size: UInt8 = 5, modified: UInt8 = 6, files: UInt8 = 7, folders: UInt8 = 8
-        static let temp: UInt8 = 9
+        static let temp: UInt8 = 9, never: UInt8 = 10
     }
 
     var terms: [Term] = []
@@ -136,6 +136,8 @@ struct CompiledQuery {
         case let .temp(neg):
             t.kind = Kind.temp; t.negated = neg
             hasTemp = true
+        case .invalid:
+            t.kind = Kind.never // negated stays false, so "!size:huge" matches nothing too
         }
         return t
     }
@@ -388,6 +390,8 @@ struct MatchContext {
                     hit = r.flags & 1 == 0
                 case CompiledQuery.Kind.temp:
                     hit = temp[id] != 0
+                case CompiledQuery.Kind.never:
+                    hit = false
                 default:
                     hit = r.flags & 1 != 0
                 }
