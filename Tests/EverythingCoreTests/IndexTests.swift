@@ -236,6 +236,31 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(Query.parse(chain).groups, [[.invalid(chain)]])
     }
 
+    func testDayEdgesWhenATimeChangeSkipsMidnight() {
+        // Sao Paulo skipped from 00:00 to 01:00 on 2018-11-04, so that day began at 01:00.
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "America/Sao_Paulo")!
+        func at(_ d: Int, _ h: Int, _ m: Int = 0) -> Int64 {
+            Int64(cal.date(from: DateComponents(year: 2018, month: 11, day: d, hour: h, minute: m))!.timeIntervalSince1970)
+        }
+        let now = cal.date(from: DateComponents(year: 2018, month: 11, day: 4, hour: 12))!
+        let index = FileIndex()
+        let root = index.addRoot("/x", modified: 0)
+        for (name, time) in [("noon4", at(4, 12)), ("early5", at(5, 0, 30)), ("late3", at(3, 23, 30))] {
+            index.add(ScannedEntry(name: name, isDirectory: false, size: 1, modified: time), parent: root)
+        }
+        index.sortIfNeeded(force: true)
+        func dm(_ q: String) -> [String] {
+            index.search(Query.parse("file: dm:" + q, now: now, calendar: cal), options: SearchOptions(limit: 100))
+                .hits.map(\.name)
+        }
+        XCTAssertEqual(dm("today"), ["noon4"])
+        XCTAssertEqual(dm("2018-11-04"), ["noon4"])
+        XCTAssertEqual(dm("2018-11-05"), ["early5"])
+        XCTAssertEqual(dm("yesterday"), ["late3"])
+        XCTAssertEqual(dm("last2days"), ["late3", "noon4"])
+    }
+
     func testNegatedFilters() {
         let index = makeIndex()
         XCTAssertEqual(names(index, "file: !size:>1gb"), ["notes.txt", "q1 report.pdf", "Q2 Report.docx"])

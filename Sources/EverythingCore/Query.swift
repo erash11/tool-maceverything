@@ -196,7 +196,10 @@ public struct Query {
     static func parseOneDay(_ s: String, now: Date, calendar: Calendar) -> (Int64, Int64)? {
         func secs(_ d: Date) -> Int64 { Int64(d.timeIntervalSince1970) }
         let today = calendar.startOfDay(for: now)
-        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+        // Day edges come from the calendar: where a time change skips midnight, a day starts at
+        // 01:00, and "today + 1 day" would land an hour into tomorrow.
+        let tomorrow = calendar.dateInterval(of: .day, for: now)?.end
+            ?? calendar.date(byAdding: .day, value: 1, to: today)!
         func period(_ unit: Calendar.Component, back: Int) -> (Int64, Int64)? {
             guard let day = calendar.date(byAdding: unit, value: -back, to: today),
                   let interval = calendar.dateInterval(of: unit, for: day) else { return nil }
@@ -208,7 +211,9 @@ public struct Query {
             if ["last", "prev", "previous"].contains(where: { s == $0 + name }) { return period(unit, back: 1) }
         }
         if s == "today" { return (secs(today), secs(tomorrow)) }
-        if s == "yesterday" { return (secs(calendar.date(byAdding: .day, value: -1, to: today)!), secs(today)) }
+        if s == "yesterday" {
+            return (secs(calendar.startOfDay(for: calendar.date(byAdding: .day, value: -1, to: today)!)), secs(today))
+        }
         if let start = parseRolling(s, now: now, today: today, calendar: calendar) {
             return (secs(start), secs(tomorrow))
         }
@@ -223,14 +228,17 @@ public struct Query {
         var unit = String(rest.dropFirst(digits.count))
         if unit.hasSuffix("s") { unit.removeLast() }
         guard let n = Int(digits), n > 0, n <= 100_000 else { return nil }
+        let back: (Calendar.Component, Int)
         switch unit {
         case "hour": return calendar.date(byAdding: .hour, value: -n, to: now)
-        case "day": return calendar.date(byAdding: .day, value: -(n - 1), to: today) // today is day 1
-        case "week": return calendar.date(byAdding: .weekOfYear, value: -n, to: today)
-        case "month": return calendar.date(byAdding: .month, value: -n, to: today)
-        case "year": return calendar.date(byAdding: .year, value: -n, to: today)
+        case "day": back = (.day, -(n - 1)) // today is day 1
+        case "week": back = (.weekOfYear, -n)
+        case "month": back = (.month, -n)
+        case "year": back = (.year, -n)
         default: return nil
         }
+        // From the start of that day (moving from a 01:00 start keeps 01:00 otherwise).
+        return calendar.date(byAdding: back.0, value: back.1, to: today).map(calendar.startOfDay)
     }
 
     /// `2026`, `2026-10` or `2026-10-15`: that year, month or day. Every part must be a number, and
@@ -247,7 +255,7 @@ public struct Query {
               calendar.component(.month, from: start) == month,
               calendar.component(.day, from: start) == day else { return nil }
         let unit: Calendar.Component = parts.count == 1 ? .year : parts.count == 2 ? .month : .day
-        guard let end = calendar.date(byAdding: unit, value: 1, to: start) else { return nil }
-        return DateInterval(start: start, end: end)
+        // The calendar's own interval, so the end is the next period's real start.
+        return calendar.dateInterval(of: unit, for: start)
     }
 }
