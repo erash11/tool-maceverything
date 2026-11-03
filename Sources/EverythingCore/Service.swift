@@ -637,8 +637,16 @@ public final class IndexService {
                 // the re-list below finishes then carry no state for this root (a load rescans
                 // it), and the one after it stamps the new disk's id with the new cursor.
                 let uuid = Watcher.volumeUUID(for: root) ?? ""
-                index.write { idx in
-                    if let saved = idx.volumeState[root], saved.volumeUUID != uuid { idx.volumeState[root] = nil }
+                let otherDisk: Bool = index.write { idx in
+                    guard let saved = idx.volumeState[root], saved.volumeUUID != uuid else { return false }
+                    idx.volumeState[root] = nil
+                    return true
+                }
+                if otherDisk {
+                    // Event ids still held for the old disk mean nothing on this one.
+                    pendingEventIds[root] = nil
+                    walkEventIds[root] = nil
+                    passStartIds?[root] = nil
                 }
                 startWatcher(root, since: since)
                 // Applied (and saved) only once the re-list below is done, like any change.
