@@ -294,7 +294,8 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(dm("2018-11-04"), ["noon4"])
         XCTAssertEqual(dm("2018-11-05"), ["early5"])
         XCTAssertEqual(dm("yesterday"), ["late3"])
-        XCTAssertEqual(dm("last2days"), ["late3", "noon4"])
+        // Starts at the start of 11-03 (not 01:00); rolling windows are open-ended, so 11-05 counts.
+        XCTAssertEqual(dm("last2days"), ["early5", "late3", "noon4"])
     }
 
     func testNegatedFilters() {
