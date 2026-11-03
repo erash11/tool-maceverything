@@ -358,10 +358,16 @@ final class IndexTests: XCTestCase {
             let name = String(letters.enumerated().map { i >> $0.offset & 1 == 1 ? Character($0.element.uppercased()) : $0.element })
             many.add(ScannedEntry(name: name, isDirectory: true, size: 0, modified: 0), parent: m)
         }
+        many.addRoot("/abcdefghijklm/R") // a root in one of those folders
         many.sortIfNeeded(force: true)
         XCTAssertEqual(many.search(Query.parse("parent:/abcdefghijklm")).total, 0)
         XCTAssertEqual(many.search(Query.parse("!parent:/abcdefghijklm")).total, 0)
         XCTAssertEqual(many.search(Query.parse("parent:/")).total, Query.maxParentFolders + 1)
+        // Only the folders a path ends at count, not those passed on the way.
+        XCTAssertEqual(many.search(Query.parse("parent:/abcdefghijklm/missing")).total, 0)
+        XCTAssertEqual(many.search(Query.parse("!parent:/abcdefghijklm/missing")).total, Query.maxParentFolders + 3)
+        // A root's own folder is found by its exact path, with no limit: R is in abcdefghijklm only.
+        XCTAssertEqual(names(many, "childcount:1"), ["abcdefghijklm"])
 
         // After these filters, ">" compares inside a group, as after size:.
         XCTAssertEqual(Query.parse("<depth:>2>").groups, Query.parse("depth:>2").groups)

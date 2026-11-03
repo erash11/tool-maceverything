@@ -416,8 +416,9 @@ extension FileIndex {
     /// Everything, so a case-sensitive volume can give more than one ("A" and "a"). Empty when
     /// there is none. The walk starts from every root the path starts with (not only the longest,
     /// as lookup does): a root /Users must not hide a folder users that / holds. Each record has one
-    /// chain of parents, so the walks never return the same id twice. Nil as soon as more than
-    /// `limit` folders match at any step.
+    /// chain of parents, so the walks never return the same id twice. Nil when the path names more
+    /// than `limit` folders (the folders passed on the way are not counted; each walk's list is
+    /// dropped when it ends).
     func folders(atLowerPath lowerPath: [UInt8], limit: Int = Query.maxParentFolders) -> [Int32]? {
         let slash = UInt8(ascii: "/")
         var path = lowerPath[...]
@@ -433,10 +434,7 @@ extension FileIndex {
             for component in path.dropFirst(root.count).split(separator: slash) {
                 var next: [Int32] = []
                 for dir in current {
-                    for kid in children[dir] ?? [] where lowerName(kid).elementsEqual(component) {
-                        next.append(kid)
-                        if found.count + next.count > limit { return nil }
-                    }
+                    for kid in children[dir] ?? [] where lowerName(kid).elementsEqual(component) { next.append(kid) }
                 }
                 current = next
                 if current.isEmpty { break }
@@ -455,24 +453,38 @@ extension FileIndex {
     /// Roots that sit directly in an indexed folder, as (root, folder): /Volumes/X in /Volumes,
     /// which the walk of / records but doesn't enter. A root has no parent record, so parent: and
     /// childcount: add these. Names are compared with case kept, as `lookup` does (String == ignores
-    /// only how accents are encoded): the folder is the one whose path is exactly the root's folder
-    /// path, and the root is left out when that folder already lists a child of the same name, since
-    /// that child is the same entry.
+    /// only how accents are encoded): the folder is the one at exactly the root's folder path, and
+    /// the root is left out when that folder already lists a child of the same name, since that
+    /// child is the same entry.
     func rootsInFolders() -> [(root: Int32, folder: Int32)] {
         var out: [(root: Int32, folder: Int32)] = []
         for id in roots {
-            let parts = name(of: id).split(separator: "/")
-            guard let last = parts.last else { continue } // "/" itself
-            let leaf = String(last)
-            let folderPath = "/" + parts.dropLast().joined(separator: "/")
-            // The case-insensitive walk finds the candidates; the exact path picks the folder.
-            let candidates = folders(atLowerPath: Array(FileIndex.searchForm(folderPath).utf8)) ?? []
-            for folder in candidates where folder != id && path(of: folder) == folderPath {
+            let parts = name(of: id).split(separator: "/").map(String.init)
+            guard let leaf = parts.last else { continue } // "/" itself
+            for folder in folders(atExactPath: Array(parts.dropLast())) where folder != id {
                 if (children[folder] ?? []).contains(where: { name(of: $0) == leaf }) { continue }
                 out.append((id, folder))
             }
         }
         return out
+    }
+
+    /// Every folder at exactly the path made of `parts` (case kept; String == ignores only how
+    /// accents are encoded), walked from every root the path starts with. Unlike the lowercase walk,
+    /// one step can't fan out into case spellings.
+    func folders(atExactPath parts: [String]) -> [Int32] {
+        var found: [Int32] = []
+        for id in roots {
+            let rootParts = name(of: id).split(separator: "/").map(String.init) // [] for "/"
+            guard parts.starts(with: rootParts) else { continue }
+            var current = [id]
+            for component in parts.dropFirst(rootParts.count) {
+                current = current.flatMap { dir in (children[dir] ?? []).filter { name(of: $0) == component } }
+                if current.isEmpty { break }
+            }
+            found += current
+        }
+        return found
     }
 
     /// Per record, the folders above it in its path: `/` is 0, `/Users` 1, a root `/Volumes/X` 2 and
