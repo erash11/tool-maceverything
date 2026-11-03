@@ -543,10 +543,12 @@ public final class IndexService {
                 walk.append((target, dir, recursive))
             }
             if target == root {
-                // Events were dropped: re-list the folders changed in the last minute first.
+                // Events were dropped: re-list the folders changed in the last minute first. At
+                // most 64 per drop, so repeated drops cannot starve the walk itself.
                 let cutoff = Date().addingTimeInterval(-60)
-                for (p, t) in recentlyChanged where t > cutoff && p != target && rootFor(p) == root {
-                    enqueue(p, recursive: false)
+                let recent = recentlyChanged.filter { $0.value > cutoff && $0.key != target && rootFor($0.key) == root }
+                for (p, _) in recent.sorted(by: { $0.value > $1.value }).prefix(64).reversed() {
+                    enqueue(p, recursive: false) // newest ends up on top
                 }
             }
             return
@@ -627,6 +629,9 @@ public final class IndexService {
                 let since = Watcher.currentEventId(for: root)
                 startWatcher(root, since: since)
                 // Applied (and saved) only once the re-list below is done, like any change.
+                // Until then a save keeps the index file's own volume id and cursor for this
+                // root, a matching pair: a different disk now mounted there fails the id check.
+                appliedEventIds[root] = nil
                 pendingEventIds[root] = max(pendingEventIds[root] ?? 0, since)
                 pendingPaths[root] = true
                 offlineRoots.remove(root)
