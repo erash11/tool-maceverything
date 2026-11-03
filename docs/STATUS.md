@@ -4,7 +4,7 @@
 **2026-11-03 (read first):**
 - MERGED #23: Ctrl+1 to Ctrl+6 sort (name, path, size, extension, type, date modified; the same
   keys again flip), through the panel's key monitor setting the table's sortOrder. App installed
-  from CI run 41714483456 (main 405c9fa). Codex: 1 round, approved. Live check: Eric.
+  from CI run 41714483456 (main 405c9fa). Codex: 1 round, approved. Confirmed working by Eric.
 - MERGED #22: sort by Type and Extension (daemon keys `type`, `extension`; app columns sortable;
   the Type and Extension columns now show the text the daemon sorts by, from public
   `FileKinds.kindName`/`extensionName`). Keys are worked out as the heap reads them (memory
