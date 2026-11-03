@@ -1,6 +1,23 @@
 # Status
 
 ## Current state
+**2026-11-02/03 parity work (read first):**
+- `scripts/parity_check.py` (Codex-reviewed, 5 rounds) times live updates and searches on the
+  real Mac. `docs/PARITY.md` scores parity with Everything: 36 have, 23 partial, 55 missing;
+  top 10 gaps listed there. Worst: unreadable terms (`dm:lastweek`, `size:10mb..50mb`) silently
+  return everything; results stop at 500 rows; Down Arrow does not enter the list.
+- PR #12 (open): live-update stall fix. Cause: dropped FSEvents made the daemon re-list all of /
+  (~2 min) on its one update queue. Fixed daemon 51bf3fe is INSTALLED; old binary at
+  `~/.local/bin/everythingd.pre-livefix-2026-11-02`. Merge after 3 clean parity runs on a quiet Mac.
+- PR #11 (open): CI uploads the app; `scripts/install-app-from-ci.sh` installs it (no Xcode).
+- Google Drive trial (Eric's Desk pick): config.json `extraRoots` = Drive account folder since
+  2026-11-03T00:21:47Z. Check after a day:
+  `awk '$1 >= "2026-11-03T00:21:47"' ~/Library/Logs/everythingd.log | grep -c "giving up"` (want 0);
+  if not 0, delete config.json to turn Drive off.
+- Found, not fixed: OneDrive container `~/Library/Group Containers/UBF8T346G9.OneDriveStandaloneSuite`
+  is indexed (164K entries; not in `Scanner.cloudExclusions`). `ev` search silently falls back to
+  the saved index when the daemon is down (wants a `--daemon-only` flag for parity_check).
+
 Running daily on Eric's MacBook since 2026-10-16 (macOS 27.0.1 as of 2026-10-24): daemon,
 `ev` CLI and menu-bar app, signed with the local certificate, Full Disk Access on. CI (macOS 15
 runners) is the compiler and is green on `main` (51 tests at d2b8ccc). Detail of the first
