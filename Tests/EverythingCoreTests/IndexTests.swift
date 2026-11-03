@@ -136,7 +136,27 @@ final class IndexTests: XCTestCase {
         for q in ["size:nanb", "size:infgb", "size:1e999b", "size:-5kb", "dm:99999999-1-1", "regex:([", "ext:", "path:"] {
             _ = index.search(Query.parse(q))
         }
-        XCTAssertTrue(Query.parse("size:nanb").isEmpty)
+        XCTAssertEqual(index.search(Query.parse("size:nanb")).total, 0)
+    }
+
+    func testUnreadableFilterMatchesNothing() {
+        // Skipping these used to leave an empty query, which matched every file.
+        let index = makeIndex()
+        XCTAssertEqual(index.search(Query.parse("")).total, 7)
+        for q in ["dm:lastweek", "dm:2026-10-01..2026-10-15", "size:10mb..50mb", "size:huge",
+                  "ext:", "path:", "drive:", "regex:", "!size:huge", "!dm:lastweek",
+                  "report dm:nonsense", "report | size:huge", "size:huge | dm:nonsense",
+                  "regex:([", "!regex:([", "report | !regex:([", "dm:2026-10-x-15", "!dm:2026-10-x-15",
+                  "dm:2026-02-30", "!dm:2026-1x-01", "dm:-2026-10-15"] {
+            let r = index.search(Query.parse(q))
+            XCTAssertEqual(r.total, q.hasPrefix("report |") ? 3 : 0, q)
+        }
+        // Real dates still parse, with or without zero padding.
+        for q in ["dm:2026-10-15", "dm:2026-1-5", "dm:<2026-10-15"] {
+            XCTAssertNotEqual(Query.parse(q).groups, [[.invalid(q)]], q)
+        }
+        XCTAssertEqual(Query.parse("size:huge").groups, [[.invalid("size:huge")]])
+        XCTAssertEqual(Query.parse("!dm:lastweek").groups, [[.invalid("!dm:lastweek")]])
     }
 
     func testNegatedFilters() {
@@ -307,7 +327,7 @@ final class IndexTests: XCTestCase {
     func testDriveKeywordAndScopeChoices() {
         XCTAssertEqual(Query.parse("drive:CRASHBOX").groups, [[.pathContains(Array("/volumes/crashbox/".utf8), negated: false)]])
         XCTAssertEqual(Query.parse("drive:/Volumes/").groups.count, 1)
-        XCTAssertTrue(Query.parse("drive:").groups.isEmpty)
+        XCTAssertEqual(Query.parse("drive:").groups, [[.invalid("drive:")]])
 
         let none = SearchScope.choices(roots: ["/", "/Volumes/CRASHBOX"], home: "/h", exists: { _ in false })
         XCTAssertEqual(none, [.all, .thisMac, .drive("/Volumes/CRASHBOX")])
