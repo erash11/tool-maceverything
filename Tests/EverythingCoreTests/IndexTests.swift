@@ -330,6 +330,23 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(names(cased, "childcount:3"), ["Volumes"])
         XCTAssertEqual(names(cased, "empty: depth:1"), ["volumes"]) // the root X is in Volumes only
 
+        // A root can sit inside another root's walk (/Users under /). parent: walks from every root
+        // the path starts with, so the folder users that / holds isn't lost, and the root /users/Y
+        // counts in users only.
+        let overlap = FileIndex()
+        let o = overlap.addRoot("/")
+        let ou = overlap.add(ScannedEntry(name: "Users", isDirectory: true, size: 0, modified: 0), parent: o)
+        overlap.add(ScannedEntry(name: "a.txt", isDirectory: false, size: 1, modified: 0), parent: ou)
+        let ol = overlap.add(ScannedEntry(name: "users", isDirectory: true, size: 0, modified: 0), parent: o)
+        overlap.add(ScannedEntry(name: "b.txt", isDirectory: false, size: 1, modified: 0), parent: ol)
+        let usersRoot = overlap.addRoot("/Users")
+        overlap.add(ScannedEntry(name: "r.txt", isDirectory: false, size: 1, modified: 0), parent: usersRoot)
+        overlap.addRoot("/users/Y")
+        overlap.sortIfNeeded(force: true)
+        XCTAssertEqual(names(overlap, "parent:/users"), ["/users/Y", "a.txt", "b.txt", "r.txt"])
+        XCTAssertEqual(names(overlap, "parent:/"), ["Users", "users"]) // the root /Users is the folder Users
+        XCTAssertEqual(names(overlap, "childcount:2"), ["/", "users"])
+
         // After these filters, ">" compares inside a group, as after size:.
         XCTAssertEqual(Query.parse("<depth:>2>").groups, Query.parse("depth:>2").groups)
         XCTAssertEqual(Query.parse("<!parents:>2 file:>").groups, Query.parse("!parents:>2 file:").groups)

@@ -410,32 +410,32 @@ extension FileIndex {
 
     /// Every folder whose lowercase path (see searchForm) is `lowerPath`: case is ignored, as in
     /// Everything, so a case-sensitive volume can give more than one ("A" and "a"). Empty when
-    /// there is none. The longest matching root wins, as in lookup.
+    /// there is none. The walk starts from every root the path starts with (not only the longest,
+    /// as lookup does): a root /Users must not hide a folder users that / holds. Each record has one
+    /// chain of parents, so the walks never return the same id twice.
     func folders(atLowerPath lowerPath: [UInt8]) -> [Int32] {
         let slash = UInt8(ascii: "/")
         var path = lowerPath[...]
         while path.count > 1 && path.last == slash { path = path.dropLast() }
-        var current: [Int32] = []
-        var rootLength = 0
+        var found: [Int32] = []
         for id in roots {
             let root = lowerName(id)
             // "/" holds every absolute path; another root only a path that continues past it with "/".
             guard path.starts(with: root),
-                  root.count == 1 || path.count == root.count || path[path.startIndex + root.count] == slash,
-                  root.count >= rootLength else { continue }
-            if root.count > rootLength { current = []; rootLength = root.count }
-            current.append(id)
-        }
-        if current.isEmpty { return [] }
-        for component in path.dropFirst(rootLength).split(separator: slash) {
-            var next: [Int32] = []
-            for dir in current {
-                for kid in children[dir] ?? [] where lowerName(kid).elementsEqual(component) { next.append(kid) }
+                  root.count == 1 || path.count == root.count || path[path.startIndex + root.count] == slash
+            else { continue }
+            var current = [id]
+            for component in path.dropFirst(root.count).split(separator: slash) {
+                var next: [Int32] = []
+                for dir in current {
+                    for kid in children[dir] ?? [] where lowerName(kid).elementsEqual(component) { next.append(kid) }
+                }
+                current = next
+                if current.isEmpty { break }
             }
-            current = next
-            if current.isEmpty { break }
+            found += current
         }
-        return current
+        return found
     }
 
     func lowerName(_ id: Int32) -> ArraySlice<UInt8> {
