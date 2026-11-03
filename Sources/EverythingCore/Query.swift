@@ -121,6 +121,16 @@ public struct Query {
         if lower.hasPrefix("dm:") {
             let (cmp, rest) = comparison(String(lower.dropFirst(3)))
             guard let (start, end) = parseDay(rest, now: now, calendar: calendar) else { return .invalid(raw) }
+            if end == Int64.max {
+                // A rolling window has only a cutoff: ">" and ">=" mean since it, "<" and "<=" before it.
+                let since: Comparison
+                switch cmp {
+                case .greater, .greaterOrEqual: since = .greaterOrEqual
+                case .less, .lessOrEqual: since = .less
+                case .equal: since = .equal
+                }
+                return .modified(since, start, end, negated: negated)
+            }
             return .modified(cmp, start, end, negated: negated)
         }
         if lower.contains("*") || lower.contains("?") {
@@ -168,8 +178,10 @@ public struct Query {
     /// `huge`, or `low..high` with sizes as in parseSize (either end may be a size name).
     static func parseSizeRange(_ s: String) -> (Int64, Int64)? {
         if let named = sizeNames[s] { return named }
-        guard let dots = s.range(of: "..") else { return nil }
-        let a = String(s[..<dots.lowerBound]), b = String(s[dots.upperBound...])
+        let ends = s.components(separatedBy: "..")
+        // Exactly one "..", and no stray dot next to it ("0...2gb" is not 0 to 0.2 GB).
+        guard ends.count == 2, !ends[0].hasSuffix("."), !ends[1].hasPrefix(".") else { return nil }
+        let a = ends[0], b = ends[1]
         guard let low = sizeNames[a]?.0 ?? parseSize(a), let high = sizeNames[b]?.1 ?? parseSize(b),
               low <= high else { return nil }
         return (low, high)

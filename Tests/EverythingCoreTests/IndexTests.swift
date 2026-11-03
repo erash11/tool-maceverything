@@ -187,7 +187,9 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(names(edge, "size:tiny"), ["one", "tenk"])
         XCTAssertEqual(names(edge, "size:small"), ["over"])
         // Negative sizes are unreadable, with or without a unit, also inside a range.
-        for q in ["size:-1", "size:-1..10", "size:-1b..10b", "size:>=-1..10", "!size:-1..10", "size:5..-1"] {
+        XCTAssertEqual(names(index, "size:0..2.5gb"), ["notes.txt", "q1 report.pdf", "Q2 Report.docx"]) // decimals still work
+        for q in ["size:-1", "size:-1..10", "size:-1b..10b", "size:>=-1..10", "!size:-1..10", "size:5..-1",
+                  "size:0...2gb", "size:0....2gb", "size:1..2..3"] {
             XCTAssertEqual(Query.parse(q).groups, [[.invalid(q)]], q)
         }
     }
@@ -244,7 +246,10 @@ final class IndexTests: XCTestCase {
         let t = Int64(now.timeIntervalSince1970)
         let index = FileIndex()
         let root = index.addRoot("/x", modified: 0)
-        for (name, time) in [("past", t - 3600), ("old", t - 86_400 * 30), ("tomorrow", t + 86_400), ("future", t + 86_400 * 400)] {
+        let day: Int64 = 86_400
+        let files: [(String, Int64)] = [("past", t - 3600), ("old", t - day * 30), ("tomorrow", t + day),
+                                        ("future", t + day * 400)]
+        for (name, time) in files {
             index.add(ScannedEntry(name: name, isDirectory: false, size: 1, modified: time), parent: root)
         }
         index.sortIfNeeded(force: true)
@@ -256,6 +261,10 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(dm("dm:last7days"), ["future", "past", "tomorrow"])
         XCTAssertEqual(dm("!dm:last7days"), ["old"])
         XCTAssertEqual(dm("dm:<last7days"), ["old"])
+        // Comparisons against a rolling window compare with its cutoff.
+        XCTAssertEqual(dm("dm:>last7days"), ["future", "past", "tomorrow"])
+        XCTAssertEqual(dm("dm:>=last7days"), ["future", "past", "tomorrow"])
+        XCTAssertEqual(dm("dm:<=last7days"), ["old"])
         XCTAssertEqual(dm("dm:today"), ["past"]) // calendar days still end at midnight
     }
 
