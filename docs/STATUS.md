@@ -62,6 +62,7 @@ still fails to build (same SwiftUIMacros error; Command Line Tools now Swift 6.4
 The old Next #5 (delete codex branches, close #10) was already done.
 
 ## Next
+0. (2026-11-03, first) On a quiet Mac run `python3 -I /Users/kristinarash/DEV/Personal/MacEverything/scripts/parity_check.py` 3 times; if all show `0 failed`, merge PR #12 then #11 (`gh pr merge 12 -R erash11/MacEverything --merge`), then check the Drive trial (command in Current state). Then fix the top gaps in `docs/PARITY.md`.
 1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
    location; `SearchScope.choices` lists every ~/Library/CloudStorage folder today. Small change
    plus a test tweak.
