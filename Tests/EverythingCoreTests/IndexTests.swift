@@ -1066,6 +1066,13 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(names(index, "report temp:"),
                        ["report-lib", "report.js", "report.md.swp", "report.pages", "report.txt", "~$report.docx"])
         XCTAssertEqual(names(index, "report").count, 7)
+        // A location added inside the Trash is a root (its name is its path): temp all the same.
+        let archive = index.addRoot("/Users/me/.Trash/archive")
+        file("report.key", archive)
+        index.addRoot("/Volumes/X/.Trashes")
+        XCTAssertEqual(names(index, "report !temp:"), ["report.md"])
+        XCTAssertEqual(names(index, "temp: .trash"), [".Trash", "/Users/me/.Trash/archive", "/Volumes/X/.Trashes"])
+        XCTAssertEqual(names(index, "!temp: .trash"), [])
         // The cached mask follows changes.
         file("report.tmp", proj)
         XCTAssertEqual(names(index, "report !temp:"), ["report.md"])

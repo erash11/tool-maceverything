@@ -48,6 +48,14 @@ enum TempFiles {
         return equal(lower, start, word.count, word)
     }
 
+    /// Whether some folder in `path` is one of folderNames ("/Users/me/.Trash/archive").
+    static func pathHasTempFolder(_ path: String) -> Bool {
+        path.split(separator: "/").contains { part in
+            let lower = Array(FileIndex.searchForm(String(part)).utf8)
+            return folderNames.contains(lower)
+        }
+    }
+
     /// Whether one record's own name marks it as temp.
     static func isTemp(_ r: Record, _ lower: UnsafeBufferPointer<UInt8>) -> Bool {
         let start = Int(r.lowerStart), len = Int(r.lowerLength)
@@ -82,6 +90,9 @@ extension FileIndex {
             for i in first..<recs.count where mask[i] == 0 {
                 let r = recs[i]
                 if (r.parent >= 0 && mask[Int(r.parent)] != 0) || TempFiles.isTemp(r, lower) { mask[i] = 1 }
+                // A root's name is its whole path, with no parent to inherit from: it is temp when
+                // any part of it is a temp folder (a location added inside the Trash or node_modules).
+                if r.parent < 0 && mask[i] == 0 && TempFiles.pathHasTempFolder(name(of: Int32(i))) { mask[i] = 1 }
             }
         }}
         tempMaskCache = (records.count, deletedCount, mask)
