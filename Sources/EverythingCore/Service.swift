@@ -90,11 +90,43 @@ public final class IndexService {
     private var appliedEventIds: [String: UInt64] = [:]
     /// Paths whose refresh failed, with the number of attempts so far.
     private var retries: [String: Int] = [:]
+    /// Folders still to list for changes taken from `pendingPaths`, newest last (listed first).
+    /// The rest of the walk-related state below covers the same changes. All live on `work`.
+    private var walk: [Scanner.PendingFolder] = []
+    /// Highest event id per root taken into `walk`; applied only once the walk is done.
+    private var walkEventIds: [String: UInt64] = [:]
+    /// Folders that failed to list during the walk, one entry each (the latest attempt).
+    private var walkFailures: [String: Scanner.RefreshFailure] = [:]
+    private var walkStarted: Date?
+    /// Recursive refreshes in this pass of the walk, and the ones asked for again meanwhile.
+    /// A repeat (FSEvents dropping events again) waits for the next pass instead of restarting
+    /// this one, so the walk finishes even when drops keep coming.
+    private var walkTargets: [String] = []
+    private var nextPass: [String: Bool] = [:]
+    /// `walkEventIds` as it was when the current next pass started: once that pass is done,
+    /// those changes are applied, even if drops keep queueing more passes.
+    private var passStartIds: [String: UInt64]?
+    private var retryScheduled = false
+    /// Folders that changed in the last minute. When FSEvents drops events these are listed
+    /// first: a bulk change big enough to overflow the queue (a 5000-file delete) most likely
+    /// went on in the same folders, and the whole-volume walk would reach them minutes later.
+    private var recentlyChanged: [String: Date] = [:]
+    /// How long one flush lists folders before letting newer changes in. 0 lists one folder.
+    var sliceSeconds = 0.25
+    /// Tests set this before `start()`: no FSEvents watchers and no automatic flushes, so
+    /// changes are applied only by `flushSliceNow()` (one slice) or `sync()`.
+    var stepsByHand = false
     static let maxRetries = 3
     /// Held while loading or scanning, so only one runs and `watchers` has one writer.
     private let lifecycle = NSLock()
     private var flushScheduled = false
     private var dirty = false
+    /// Compacts and writes index snapshots off `work`, so live changes keep applying during a
+    /// save (a 212 MB save took 4 to 69 s and blocked every change meanwhile). Serial, so files
+    /// are written in the order their snapshots were taken.
+    private let saveQueue = DispatchQueue(label: "MacEverything.save", qos: .utility)
+    /// A background save is queued or running. Lives on `work`.
+    private var saveInFlight = false
     private var timer: DispatchSourceTimer?
     private let log: (String) -> Void
 
@@ -296,8 +328,10 @@ public final class IndexService {
             // Queued changes refer to the old index; the replay from `since` covers them.
             pendingPaths = [:]
             pendingEventIds = [:]
+            resetWalk() // its ids point into the old index
             appliedEventIds = fresh.volumeState.mapValues(\.lastEventId)
             index.replace(with: fresh)
+            dirty = true // lives on `work`
             locked { _replacing = false }
         }
         locked {
@@ -306,9 +340,8 @@ public final class IndexService {
             _scanningRoot = nil
             _ready = true
         }
-        dirty = true
         startWatchers(since: fresh.volumeState)
-        work.async { try? self.saveOnWork() }
+        work.async { self.saveInBackground() }
     }
 
     /// Caller holds `lifecycle`.
@@ -321,6 +354,7 @@ public final class IndexService {
 
     /// Caller holds `lifecycle`.
     private func startWatcher(_ root: String, since: UInt64?) {
+        if stepsByHand { return }
         watchers.filter { $0.root == root }.forEach { $0.stop() }
         watchers.removeAll { $0.root == root }
         let w = Watcher(root: root) { [weak self] events in
@@ -337,17 +371,24 @@ public final class IndexService {
 
     // MARK: - Updates
 
-    private func receive(_ events: [Watcher.Event], root: String) {
+    func receive(_ events: [Watcher.Event], root: String) {
         work.async {
             if let maxId = events.map(\.id).max(), maxId > (self.pendingEventIds[root] ?? 0) {
                 self.pendingEventIds[root] = maxId
             }
             for e in events {
                 guard let (p, recursive) = IndexService.target(for: e, root: root) else { continue }
+                if p == root && recursive && self.pendingPaths[root] != true {
+                    // Rare and expensive (a whole-volume re-list): say why it happened.
+                    let why = e.dropped ? "events were dropped" : e.rootChanged ? "the root changed"
+                        : e.mustScanSubDirs ? "FSEvents asked for a subtree scan" : "event outside the root"
+                    self.log("re-listing all of \(root): \(why) (event \(e.id) on \(e.path))")
+                }
                 if p != root && self.isExcluded(p) { continue }
                 self.pendingPaths[p] = (self.pendingPaths[p] ?? false) || recursive
             }
-            if !self.flushScheduled && (!self.pendingPaths.isEmpty || !self.pendingEventIds.isEmpty) {
+            if !self.stepsByHand && !self.flushScheduled
+                && (!self.pendingPaths.isEmpty || !self.pendingEventIds.isEmpty) {
                 self.flushScheduled = true
                 self.work.asyncAfter(deadline: .now() + 0.2) { self.flush() }
             }
@@ -390,79 +431,195 @@ public final class IndexService {
     }
 
     /// Applies queued folder changes. Runs on `work`.
-    private func flush() {
+    ///
+    /// Changed folders go on top of `walk`, so they are listed first. A long walk (the whole
+    /// volume, after FSEvents dropped events) is listed a slice at a time; between slices the
+    /// changes that arrived meanwhile are taken in and listed ahead of it, so they show within
+    /// a second instead of after the minutes the walk takes. `drain` lists everything first.
+    private func flush(drain: Bool = false) {
         flushScheduled = false
         if locked({ _replacing }) {
             pendingPaths = [:]
             pendingEventIds = [:]
+            resetWalk()
             return
         }
         let batch = pendingPaths
-        let ids = pendingEventIds
         pendingPaths = [:]
+        for (root, id) in pendingEventIds where id > (walkEventIds[root] ?? 0) { walkEventIds[root] = id }
         pendingEventIds = [:]
-        var failedRoots = Set<String>()
-        defer {
-            for (root, id) in ids {
-                if failedRoots.contains(root) {
-                    // Keep the cursor behind the unapplied change; retry later.
-                    pendingEventIds[root] = max(pendingEventIds[root] ?? 0, id)
-                } else if id > (appliedEventIds[root] ?? 0) {
-                    appliedEventIds[root] = id
-                }
+        let now = Date()
+        for path in batch.keys { recentlyChanged[path] = now }
+        if recentlyChanged.count > 2000 { recentlyChanged = recentlyChanged.filter { now.timeIntervalSince($0.value) < 60 } }
+        // Longest first, so parents end up on top and are listed first.
+        for path in batch.keys.sorted(by: { $0.count > $1.count }) { enqueue(path, recursive: batch[path] ?? false) }
+        repeat {
+            if walk.isEmpty && !nextPass.isEmpty {
+                // A pass is done. If it was a next pass, what was taken in before it is applied.
+                if let covered = passStartIds { settle(covered) }
+                passStartIds = walkEventIds
+                let again = nextPass
+                nextPass = [:]
+                walkTargets = []
+                for path in again.keys.sorted(by: { $0.count > $1.count }) { enqueue(path, recursive: again[path]!) }
             }
-            if !pendingPaths.isEmpty && !flushScheduled {
+            if !walk.isEmpty {
+                if walkStarted == nil { walkStarted = Date() }
+                let end = Date().addingTimeInterval(sliceSeconds)
+                let failed = scanner.refreshFailures(index, queue: &walk,
+                                                     cancelled: { self.locked { self._replacing } },
+                                                     yield: { !drain && Date() >= end },
+                                                     handled: { path, deep in
+                                                         // Listed fine: an earlier failure it covers
+                                                         // is over (a shallow listing does not
+                                                         // cover a failed walk below the folder).
+                                                         if deep || self.walkFailures[path]?.recursive != true {
+                                                             self.walkFailures[path] = nil
+                                                             self.retries[path] = nil
+                                                         }
+                                                     },
+                                                     // A new folder is where a bulk change most
+                                                     // likely goes on (mkdir, then 5000 files).
+                                                     discovered: { self.recentlyChanged[$0] = Date() })
+                for f in failed {
+                    var latest = f
+                    latest.recursive = f.recursive || (walkFailures[f.path]?.recursive ?? false)
+                    walkFailures[f.path] = latest
+                }
+                if index.read({ $0.unsorted.count }) > 50_000 { sortOffLock() }
+                dirty = true
+            }
+            if locked({ _replacing }) {
+                // Cancelled for a full scan: nothing was applied, so no cursor may move.
+                resetWalk()
+                return
+            }
+        } while drain && !nextPass.isEmpty
+        if !walk.isEmpty || !nextPass.isEmpty {
+            // Unfinished: the event ids stay held, so a save never claims the rest is applied.
+            // Changes queued behind this block are taken in by the next slice, ahead of the walk.
+            if !stepsByHand {
                 flushScheduled = true
-                work.asyncAfter(deadline: .now() + 5) { self.flush() }
+                work.async { self.flush() }
+            }
+            return
+        }
+        finishWalk()
+    }
+
+    /// Puts one changed folder on top of the walk. Runs on `work`.
+    private func enqueue(_ path: String, recursive wanted: Bool) {
+        // Resolve under the shared lock; refresh lists folders without holding any lock.
+        // Ids stay valid across slices because every index write happens on this queue
+        // and compaction waits until the walk is done.
+        let resolved: (String, Int32, Bool)? = index.read { idx in
+            var target = path
+            var recursive = wanted
+            var id = idx.lookup(target)
+            // A folder we have never seen: refresh its nearest known ancestor instead.
+            while id == nil {
+                let parent = (target as NSString).deletingLastPathComponent
+                if parent == target || parent.isEmpty { break }
+                target = parent
+                recursive = false
+                id = idx.lookup(target)
+            }
+            guard let dir = id, idx.records[Int(dir)].isDirectory else { return nil }
+            return (target, dir, recursive)
+        }
+        guard let (target, dir, recursive) = resolved else { return }
+        if roots.contains(target) && !FileManager.default.fileExists(atPath: target) {
+            offlineRoots.insert(target) // a drive was unplugged; rescanned when it returns
+        }
+        if recursive {
+            let root = rootFor(target)
+            func covers(_ outer: String, _ inner: String) -> Bool {
+                rootFor(inner) == root && (outer == root || inner == outer || inner.hasPrefix(outer + "/"))
+            }
+            if walkTargets.contains(target) {
+                // The same walk again (events dropped again): restarting it each time could
+                // keep it from ever finishing, so it runs once more after this pass. A folder
+                // below a walk under way goes on top instead, like any change.
+                nextPass[target] = true
+            } else {
+                // This walk covers whatever is queued below it, so it replaces those entries.
+                walk.removeAll { covers(target, $0.path) }
+                walkTargets.removeAll { covers(target, $0) }
+                walkTargets.append(target)
+                walk.append((target, dir, recursive))
+            }
+            if target == root {
+                // Events were dropped: re-list the folders changed in the last minute first. At
+                // most 64 per drop, so repeated drops cannot starve the walk itself.
+                let cutoff = Date().addingTimeInterval(-60)
+                let recent = recentlyChanged.filter { $0.value > cutoff && $0.key != target && rootFor($0.key) == root }
+                for (p, _) in recent.sorted(by: { $0.value > $1.value }).prefix(64).reversed() {
+                    enqueue(p, recursive: false) // newest ends up on top
+                }
+            }
+            return
+        }
+        walk.append((target, dir, recursive))
+    }
+
+    /// Everything taken into the walk is listed: retry what failed, advance the cursors.
+    private func finishWalk() {
+        if let started = walkStarted, Date().timeIntervalSince(started) > 2 {
+            log("applied queued changes in " + String(format: "%.1f s", Date().timeIntervalSince(started)))
+        }
+        settle(walkEventIds)
+        resetWalk()
+        // Its own flag, so a retry waiting 5 s never delays a fresh change's 0.2 s flush.
+        if !pendingPaths.isEmpty && !retryScheduled && !stepsByHand {
+            retryScheduled = true
+            work.asyncAfter(deadline: .now() + 5) {
+                self.retryScheduled = false
+                self.flush()
             }
         }
-        if batch.isEmpty { return }
-        // Parents first, so a rescan of a parent covers its children.
-        let ordered = batch.keys.sorted { $0.count < $1.count }
-        for path in ordered {
-            // Resolve under the shared lock; refresh lists folders without holding any lock.
-            // Ids stay valid because every index write happens on this queue.
-            let resolved: (String, Int32, Bool)? = index.read { idx in
-                var target = path
-                var recursive = batch[path] ?? false
-                var id = idx.lookup(target)
-                // A folder we have never seen: refresh its nearest known ancestor instead.
-                while id == nil {
-                    let parent = (target as NSString).deletingLastPathComponent
-                    if parent == target || parent.isEmpty { break }
-                    target = parent
-                    recursive = false
-                    id = idx.lookup(target)
-                }
-                guard let dir = id, idx.records[Int(dir)].isDirectory else { return nil }
-                return (target, dir, recursive)
+    }
+
+    /// Accounts for the folders that failed so far and applies the event ids in `ids`, except
+    /// for roots with a failure: those ids wait in `pendingEventIds` for the retry.
+    private func settle(_ ids: [String: UInt64]) {
+        var failedRoots = Set<String>()
+        // Retry only the folders that failed, not the whole request: a volume-wide refresh
+        // with one unreadable folder in it would otherwise re-list millions of entries.
+        for f in walkFailures.values {
+            let attempts = (retries[f.path] ?? 0) + 1
+            if attempts > IndexService.maxRetries {
+                // Persistently unreadable: stop holding the cursor back, or one folder
+                // would stall every later save.
+                let reason = f.errno != 0 ? String(cString: strerror(f.errno)) : "unknown error"
+                log("giving up on \(f.path) after \(IndexService.maxRetries) failed refreshes (\(reason))")
+                retries[f.path] = nil
+                continue
             }
-            guard let (target, dir, recursive) = resolved else { continue }
-            let failures = scanner.refreshFailures(index, dir: dir, path: target, recursive: recursive,
-                                                   cancelled: { self.locked { self._replacing } })
-            if !failures.contains(where: { $0.path == path }) { retries[path] = nil }
-            if failures.isEmpty && roots.contains(target) && !FileManager.default.fileExists(atPath: target) {
-                offlineRoots.insert(target) // a drive was unplugged; rescanned when it returns
-            }
-            // Retry only the folders that failed, not the whole request: a volume-wide refresh
-            // with one unreadable folder in it would otherwise re-list millions of entries.
-            for f in failures {
-                let attempts = (retries[f.path] ?? 0) + 1
-                if attempts > IndexService.maxRetries {
-                    // Persistently unreadable: stop holding the cursor back, or one folder
-                    // would stall every later save.
-                    let reason = f.errno != 0 ? String(cString: strerror(f.errno)) : "unknown error"
-                    log("giving up on \(f.path) after \(IndexService.maxRetries) failed refreshes (\(reason))")
-                    retries[f.path] = nil
-                    continue
-                }
-                retries[f.path] = attempts
-                pendingPaths[f.path] = (pendingPaths[f.path] ?? false) || f.recursive
-                failedRoots.insert(rootFor(f.path))
-            }
+            retries[f.path] = attempts
+            pendingPaths[f.path] = (pendingPaths[f.path] ?? false) || f.recursive
+            failedRoots.insert(rootFor(f.path))
         }
-        if index.read({ $0.unsorted.count }) > 50_000 { sortOffLock() }
-        dirty = true
+        walkFailures = [:]
+        for root in failedRoots {
+            // Keep the cursor behind the unapplied change, and everything taken in after it.
+            let held = max(ids[root] ?? 0, walkEventIds[root] ?? 0)
+            if held > 0 { pendingEventIds[root] = max(pendingEventIds[root] ?? 0, held) }
+            walkEventIds[root] = nil
+            passStartIds?[root] = nil
+        }
+        for (root, id) in ids where !failedRoots.contains(root) && id > (appliedEventIds[root] ?? 0) {
+            appliedEventIds[root] = id
+        }
+    }
+
+    private func resetWalk() {
+        walk = []
+        walkEventIds = [:]
+        walkFailures = [:]
+        walkStarted = nil
+        walkTargets = []
+        nextPass = [:]
+        passStartIds = nil
     }
 
     private func maintenance() {
@@ -476,8 +633,27 @@ public final class IndexService {
         if !returned.isEmpty, lifecycle.try() {
             for root in returned {
                 let since = Watcher.currentEventId(for: root)
+                // A different disk at the same path: forget the old disk's id. Saves made before
+                // the re-list below finishes then carry no state for this root (a load rescans
+                // it), and the one after it stamps the new disk's id with the new cursor.
+                let uuid = Watcher.volumeUUID(for: root) ?? ""
+                let otherDisk: Bool = index.write { idx in
+                    guard let saved = idx.volumeState[root], saved.volumeUUID != uuid else { return false }
+                    idx.volumeState[root] = nil
+                    return true
+                }
+                if otherDisk {
+                    // Event ids still held for the old disk mean nothing on this one.
+                    pendingEventIds[root] = nil
+                    walkEventIds[root] = nil
+                    passStartIds?[root] = nil
+                }
                 startWatcher(root, since: since)
-                appliedEventIds[root] = since
+                // Applied (and saved) only once the re-list below is done, like any change.
+                // Until then a save keeps the index file's own volume id and cursor for this
+                // root, a matching pair: a different disk now mounted there fails the id check.
+                appliedEventIds[root] = nil
+                pendingEventIds[root] = max(pendingEventIds[root] ?? 0, since)
                 pendingPaths[root] = true
                 offlineRoots.remove(root)
                 log("\(root) is back; rescanning it")
@@ -487,7 +663,8 @@ public final class IndexService {
         }
         // Heavy work runs under the shared lock; the write lock is held only to swap results in.
         // Nothing else writes the index meanwhile, since all writes happen on this queue.
-        let compacted: FileIndex? = index.read { idx in
+        // Not while a walk is unfinished: it holds record ids, which compaction renumbers.
+        let compacted: FileIndex? = !walk.isEmpty || !nextPass.isEmpty ? nil : index.read { idx in
             idx.records.count > 0 && Double(idx.deletedCount) / Double(idx.records.count) > 0.2
                 ? idx.compacted() : nil
         }
@@ -498,7 +675,7 @@ public final class IndexService {
             sortOffLock()
         }
         saveCounter += 1
-        if dirty && saveCounter % 10 == 0 { try? saveOnWork() }
+        if dirty && saveCounter % 10 == 0 { saveInBackground() }
     }
     private var saveCounter = 0
     /// Roots whose path disappeared (an unplugged drive). Lives on `work`.
@@ -510,35 +687,96 @@ public final class IndexService {
         index.write { $0.install(order: order) }
     }
 
-    /// Applies queued changes, then saves. Safe from any thread except `work`.
+    /// Applies queued changes, then saves. Safe from any thread except `work`. Returns once the
+    /// file is written, after any background save queued before it.
     public func save() throws {
-        try work.sync { try saveOnWork() }
+        // The write is queued in the same `work` step that takes the snapshot, so writes land in
+        // snapshot order: an older snapshot can never overwrite a newer file.
+        let done = DispatchSemaphore(value: 0)
+        var failure: Error?
+        let queued: Bool = work.sync {
+            guard let snap = snapshotOnWork() else { return false }
+            saveQueue.async {
+                do { try self.write(snap) } catch { failure = error }
+                done.signal()
+            }
+            return true
+        }
+        guard queued else { return }
+        done.wait()
+        if let failure { throw failure }
     }
 
-    /// Runs on `work`, so no change can be applied between choosing the event ids and writing.
-    private func saveOnWork() throws {
+    /// Runs on `work`: snapshots now, writes on `saveQueue`. Skipped while one is in flight; the
+    /// index stays dirty, so a later maintenance pass saves it.
+    private func saveInBackground() {
+        guard !saveInFlight, let snap = snapshotOnWork() else { return }
+        saveInFlight = true
+        saveQueue.async {
+            try? self.write(snap)
+            self.work.async { self.saveInFlight = false }
+        }
+    }
+
+    /// Runs on `work`, so no change can be applied between choosing the event ids and taking the
+    /// snapshot: the saved cursors always match the saved records.
+    private func snapshotOnWork() -> (index: FileIndex, started: Date)? {
         // Before the first load or scan finishes, the index is empty; saving it would
         // overwrite a good index file.
-        guard ready else { return }
+        guard ready else { return nil }
+        let started = Date()
         flush()
         let applied = appliedEventIds
-        sortOffLock()
-        index.write { idx in
+        // No sort here: FileIndex.save sorts its compacted copy off this queue when needed
+        // (a sort of 2.8M names held `work` for about 3 s).
+        let snap: FileIndex = index.write { idx in
             for (root, id) in applied {
-                idx.volumeState[root] = .init(volumeUUID: Watcher.volumeUUID(for: root) ?? "", lastEventId: id,
-                                              perDevice: idx.volumeState[root]?.perDevice)
+                // Keep the volume id the records came from (set by the scan that listed them).
+                // Asking the disk now could pair one disk's records with another disk mounted at
+                // the same path; a kept id that no longer matches only costs a rescan at load.
+                // No stored id (a different disk came back, see maintenance): ask the disk, as a scan does.
+                let saved = idx.volumeState[root]
+                idx.volumeState[root] = .init(volumeUUID: saved?.volumeUUID ?? Watcher.volumeUUID(for: root) ?? "",
+                                              lastEventId: id,
+                                              perDevice: saved?.perDevice ?? Watcher(root: root) { _ in }.isPerDevice)
             }
+            return idx.snapshot()
         }
-        // Serializing (and compacting, if needed) only reads, so searches continue meanwhile.
-        try index.read { try $0.save(to: indexURL) }
+        // Changes after this point dirty the index again; a failed write below re-dirties it.
         dirty = false
-        log("saved index to \(indexURL.path)")
+        return (snap, started)
+    }
+
+    /// Runs on `saveQueue`.
+    private func write(_ snap: (index: FileIndex, started: Date)) throws {
+        let wrote = Date()
+        do {
+            try snap.index.save(to: indexURL)
+        } catch {
+            work.async { self.dirty = true }
+            log("could not save index: \(error)")
+            throw error
+        }
+        log("saved index to \(indexURL.path) in " + String(format: "%.1f s", Date().timeIntervalSince(snap.started))
+            + String(format: " (%.1f s off the update queue)", Date().timeIntervalSince(wrote)))
     }
 
     // MARK: - Requests
 
     /// Waits until queued changes are applied. For tests and the `sync` command.
-    public func sync() { work.sync { flush() } }
+    public func sync() { work.sync { flush(drain: true) } }
+
+    /// Runs one flush: queued changes, then one slice of an unfinished walk. For tests.
+    func flushSliceNow() { work.sync { flush() } }
+
+    /// Folders an unfinished walk has yet to list. For tests.
+    var foldersLeftToList: Int { work.sync { walk.count } }
+
+    /// Whole-tree refreshes waiting for the walk under way to finish. For tests.
+    var passesWaiting: Int { work.sync { nextPass.count } }
+
+    /// The newest event id whose change is in the index, the one a save records. For tests.
+    func appliedEventId(for root: String) -> UInt64? { work.sync { appliedEventIds[root] } }
 
     /// Runs the once-a-minute maintenance pass now. For tests.
     func maintenanceNow() { work.sync { maintenance() } }

@@ -121,6 +121,33 @@ final class MacTests: XCTestCase {
         XCTAssertNotNil(index.lookup(dir + "/a/b/two.PDF"), "an unreadable folder must not lose its entries")
     }
 
+    /// A walk below a folder that failed is still owed after the folder alone lists fine.
+    func testShallowListingDoesNotClearAFailedWalk() throws {
+        let index = FileIndex()
+        let root = index.addRoot(dir)
+        Scanner().scanTree(into: index, root: root, rootPath: dir)
+        let b = index.lookup(dir + "/a/b")!
+        let fm = FileManager.default
+        // A file where the folder was: listing fails with ENOTDIR, not "gone" or "denied".
+        try fm.moveItem(atPath: dir + "/a/b", toPath: dir + "/a/b-saved")
+        fm.createFile(atPath: dir + "/a/b", contents: nil, attributes: [.posixPermissions: 0o755])
+        var queue: [EverythingCore.Scanner.PendingFolder] = [(dir + "/a/b", b, false), (dir + "/a/b", b, true)]
+        var restored = false
+        var handled: [String] = []
+        let failures = Scanner().refreshFailures(SharedIndex(index), queue: &queue, yield: {
+            if !restored { // after the failed walk, before the shallow listing
+                try? fm.removeItem(atPath: self.dir + "/a/b")
+                try? fm.moveItem(atPath: self.dir + "/a/b-saved", toPath: self.dir + "/a/b")
+                restored = true
+            }
+            return false
+        }, handled: { path, _ in handled.append(path) })
+        XCTAssertTrue(restored)
+        XCTAssertFalse(handled.contains(dir + "/a/b"), "still owed a walk, so its retry count must stay")
+        XCTAssertEqual(failures.map { $0.path }, [dir + "/a/b"])
+        XCTAssertEqual(failures.first?.recursive, true)
+    }
+
     func testRefreshStopsWhenCancelled() throws {
         let index = FileIndex()
         let root = index.addRoot(dir)
@@ -211,6 +238,131 @@ final class MacTests: XCTestCase {
         service.sync()
         XCTAssertEqual(service.index.read { $0.search(Query.parse("returned.txt")).total }, 1)
         service.stop()
+    }
+
+    /// When FSEvents drops events the whole root is re-listed, which took minutes on a 2.6M-entry
+    /// Mac and blocked every later change until it finished (2026-11-02: a new file showed
+    /// after 81 s). Newer changes must be listed ahead of that walk, and the saved cursor must
+    /// stay behind the drop until the walk is done.
+    func testChangesAreListedAheadOfAWholeRootRescan() throws {
+        for i in 0..<20 {
+            try FileManager.default.createDirectory(atPath: dir + "/deep/d\(i)", withIntermediateDirectories: true)
+        }
+        let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-walk.bin"))
+        service.sliceSeconds = 0 // one folder per slice
+        service.stepsByHand = true // only the events below, listed slice by slice
+        service.start()
+        defer { service.stop() }
+        let before = service.appliedEventId(for: dir) ?? 0
+        func event(_ path: String, dropped: Bool = false, id: UInt64) -> Watcher.Event {
+            Watcher.Event(path: path, mustScanSubDirs: dropped, rootChanged: false, historyDone: false,
+                          dropped: dropped, id: id)
+        }
+        func count(_ q: String) -> Int { service.index.read { $0.search(Query.parse(q)).total } }
+
+        service.receive([event("/", dropped: true, id: before + 10)], root: dir)
+        service.flushSliceNow() // lists the root only; a, deep and empty are next
+        XCTAssertEqual(service.foldersLeftToList, 3)
+
+        // a/b/c is three folders below the top of the walk, so only its own event can list it now.
+        FileManager.default.createFile(atPath: dir + "/a/b/c/fresh.txt", contents: nil)
+        XCTAssertEqual(count("fresh.txt"), 0)
+        service.receive([event(dir + "/a/b/c/", id: before + 20)], root: dir)
+        service.flushSliceNow()
+        XCTAssertEqual(count("fresh.txt"), 1, "a new change must not wait for the rescan")
+        XCTAssertEqual(service.foldersLeftToList, 3, "the rescan is still under way")
+        XCTAssertLessThan(service.appliedEventId(for: dir) ?? 0, before + 10,
+                          "the cursor must not pass the dropped events before the rescan is done")
+
+        // FSEvents asks for a subtree scan of a/b: listed now, not after the whole walk.
+        FileManager.default.createFile(atPath: dir + "/a/b/c/subtree.txt", contents: nil)
+        service.receive([Watcher.Event(path: dir + "/a/b/", mustScanSubDirs: true, rootChanged: false,
+                                       historyDone: false, id: before + 25)], root: dir)
+        service.flushSliceNow() // lists a/b
+        service.flushSliceNow() // lists a/b/c
+        XCTAssertEqual(count("subtree.txt"), 1)
+        XCTAssertEqual(service.passesWaiting, 0)
+        XCTAssertEqual(service.foldersLeftToList, 3, "the root walk is still under way")
+
+        // Dropped again: queued as a second pass, not a restart that could never finish.
+        service.receive([event("/", dropped: true, id: before + 30)], root: dir)
+        service.flushSliceNow()
+        XCTAssertEqual(service.passesWaiting, 1, "a restart would have dropped the first pass instead")
+        XCTAssertGreaterThan(service.foldersLeftToList, 0)
+
+        service.sync()
+        XCTAssertEqual(service.foldersLeftToList, 0)
+        XCTAssertEqual(service.passesWaiting, 0)
+        XCTAssertGreaterThanOrEqual(service.appliedEventId(for: dir) ?? 0, before + 30)
+        XCTAssertEqual(count("two.pdf"), 1)
+        XCTAssertEqual(count("\"path:/deep/d\""), 20)
+    }
+
+    /// Bulk changes can make FSEvents drop events again during every pass of the walk. Each
+    /// finished pass must still apply what was taken in before it started.
+    func testCursorAdvancesPassByPassWhileDropsKeepComing() throws {
+        let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-passes.bin"))
+        service.sliceSeconds = 0
+        service.stepsByHand = true
+        service.start()
+        defer { service.stop() }
+        let before = service.appliedEventId(for: dir) ?? 0
+        func drop(_ id: UInt64) {
+            service.receive([Watcher.Event(path: "/", mustScanSubDirs: true, rootChanged: false,
+                                           historyDone: false, dropped: true, id: id)], root: dir)
+            service.flushSliceNow()
+        }
+        func finishPass() { // until the queued next pass has started
+            var steps = 0
+            while service.passesWaiting > 0 && steps < 1000 { service.flushSliceNow(); steps += 1 }
+        }
+        drop(before + 10) // pass 1
+        drop(before + 20) // during pass 1: pass 2 queued
+        XCTAssertEqual(service.passesWaiting, 1)
+        finishPass() // pass 1 done, pass 2 started
+        XCTAssertLessThan(service.appliedEventId(for: dir) ?? 0, before + 10, "pass 2 is still owed")
+        drop(before + 30) // during pass 2: pass 3 queued
+        finishPass() // pass 2 done: everything up to the drop it covers is applied
+        XCTAssertEqual(service.appliedEventId(for: dir), before + 20)
+        service.sync()
+        XCTAssertEqual(service.appliedEventId(for: dir), before + 30)
+    }
+
+    /// A 5000-file delete overflows the FSEvents queue, so its own events are the dropped ones.
+    /// Folders that changed just before are listed first instead of minutes into the walk.
+    func testRecentlyChangedFoldersAreListedFirstAfterDroppedEvents() throws {
+        let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-recent.bin"))
+        service.sliceSeconds = 0
+        service.stepsByHand = true
+        service.start()
+        defer { service.stop() }
+        let before = service.appliedEventId(for: dir) ?? 0
+        func event(_ path: String, dropped: Bool = false, id: UInt64) -> Watcher.Event {
+            Watcher.Event(path: path, mustScanSubDirs: dropped, rootChanged: false, historyDone: false,
+                          dropped: dropped, id: id)
+        }
+        service.receive([event(dir + "/a/b/c/", id: before + 1)], root: dir)
+        service.flushSliceNow()
+
+        FileManager.default.createFile(atPath: dir + "/a/b/c/during-drop.txt", contents: nil)
+        service.receive([event("/", dropped: true, id: before + 2)], root: dir)
+        service.flushSliceNow() // one folder: the recently changed a/b/c, not the root
+        XCTAssertEqual(service.index.read { $0.search(Query.parse("during-drop")).total }, 1)
+        XCTAssertGreaterThan(service.foldersLeftToList, 0, "the walk of the root is still to come")
+        service.sync()
+        XCTAssertEqual(service.foldersLeftToList, 0)
+
+        // A folder just created counts as recently changed too: its own events may be the
+        // dropped ones (mkdir, then thousands of files).
+        try FileManager.default.createDirectory(atPath: dir + "/bulk", withIntermediateDirectories: true)
+        service.receive([event(dir + "/", id: before + 3)], root: dir)
+        service.sync() // lists dir, finds bulk new and lists it
+        FileManager.default.createFile(atPath: dir + "/bulk/in-new-folder.txt", contents: nil)
+        service.receive([event("/", dropped: true, id: before + 4)], root: dir)
+        service.flushSliceNow()
+        service.flushSliceNow() // the recently changed dir and bulk, in either order
+        XCTAssertEqual(service.index.read { $0.search(Query.parse("in-new-folder")).total }, 1)
+        XCTAssertGreaterThan(service.foldersLeftToList, 0, "the walk of the root is still to come")
     }
 
     func testOnlyNewRootsAreScannedOnLoad() throws {

@@ -99,6 +99,12 @@ The old Next #5 (delete codex branches, close #10) was already done.
 - Cloud sessions cannot delete GitHub branches (API and `git push --delete` both refused).
 - Index writes must stay on `IndexService.work`; `PathTable` and the temp mask rely on parent id
   < child id and on records being append-only.
+- FSEvents drops events after big bulk changes (2000 to 5000 files created or deleted at once):
+  the log says `re-listing all of /: events were dropped`, and the daemon re-lists the whole
+  volume (88 to 118 s at 2.58M entries, 2026-11-02). Since PR #12 that walk runs in 0.25 s
+  slices: other changes still show in under a second, folders changed in the last minute are
+  listed first, and the saved cursor waits for the walk. `applied queued changes in N s` marks
+  its end. Before #12 every change waited for it (parity_check: 44 to 81 s).
 - External drives with no FSEvents history (CRASHBOX reports event id 0, likely exFAT) are
   rescanned at every daemon start by design (about 15 s for 220K entries).
 - The daemon restarts itself (launchd KeepAlive) when locations change: `ev`/app "reload", or the

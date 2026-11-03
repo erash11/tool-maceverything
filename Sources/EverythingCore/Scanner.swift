@@ -282,10 +282,32 @@ public struct Scanner {
     /// returns true (a full scan is about to replace the index).
     public func refreshFailures(_ shared: SharedIndex, dir: Int32, path: String, recursive: Bool,
                                 cancelled: () -> Bool = { false }) -> [RefreshFailure] {
+        var queue: [PendingFolder] = [(path, dir, recursive)]
+        return refreshFailures(shared, queue: &queue, cancelled: cancelled)
+    }
+
+    /// A folder still to list: its path, record id, and whether to walk everything below it.
+    public typealias PendingFolder = (path: String, id: Int32, recursive: Bool)
+
+    /// Lists the folders in `queue`, last first, adding the ones below them as it goes. When
+    /// `yield` returns true after a folder, it stops and leaves the rest in `queue`, so a long
+    /// walk (a whole volume, after FSEvents dropped events) can let newer changes go first.
+    /// At least one folder is listed per call. Cancelling empties `queue`. `handled` gets each
+    /// folder that did not fail and whether everything below it is being walked too, so the
+    /// caller can forget an earlier failure of it that this listing covers. `discovered` gets
+    /// each new folder found by a listing that was not already walking everything below.
+    public func refreshFailures(_ shared: SharedIndex, queue: inout [PendingFolder],
+                                cancelled: () -> Bool = { false },
+                                yield: () -> Bool = { false },
+                                handled: (String, Bool) -> Void = { _, _ in },
+                                discovered: (String) -> Void = { _ in }) -> [RefreshFailure] {
         var failures: [RefreshFailure] = []
-        var queue: [(String, Int32, Bool)] = [(path, dir, recursive)]
         while let (p, id, deep) = queue.popLast() {
-            if cancelled() { return [] }
+            let failedBefore = failures.count
+            if cancelled() {
+                queue = []
+                return []
+            }
             var code: Int32 = 0
             let entries = list(p, error: &code)
             let gone = entries == nil && !FileManager.default.fileExists(atPath: p)
@@ -295,7 +317,7 @@ public struct Scanner {
             // instead of retrying it.
             let denied = entries == nil && !gone
                 && (code == EACCES || code == EPERM || access(p, R_OK | X_OK) != 0)
-            let next: [(String, Int32, Bool)] = shared.write { index in
+            let next: [PendingFolder] = shared.write { index in
                 if index.records[Int(id)].isDeleted { return [] }
                 guard let entries else {
                     if denied {
@@ -311,17 +333,25 @@ public struct Scanner {
                     return []
                 }
                 let newDirs = Set(index.replaceChildren(of: id, with: entries))
-                var out: [(String, Int32, Bool)] = []
+                var out: [PendingFolder] = []
                 for kid in index.childIds(of: id) where index.records[Int(kid)].isDirectory {
                     guard deep || newDirs.contains(kid) else { continue }
                     let kidName = index.name(of: kid)
                     let kidPath = p == "/" ? "/" + kidName : p + "/" + kidName
                     if skips(kidPath, name: kidName) { continue }
+                    if !deep { discovered(kidPath) }
                     out.append((kidPath, kid, true))
                 }
                 return out
             }
+            if failures.count == failedBefore {
+                // A listing of the folder alone does not cover a failed walk below it.
+                if !failures.isEmpty { failures.removeAll { $0.path == p && (deep || !$0.recursive) } }
+                // Still owed a walk below it: not handled, so the caller keeps its retry count.
+                if failures.isEmpty || !failures.contains(where: { $0.path == p }) { handled(p, deep) }
+            }
             queue.append(contentsOf: next)
+            if !queue.isEmpty && yield() { break }
         }
         return failures
     }
