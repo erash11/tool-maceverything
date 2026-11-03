@@ -207,6 +207,17 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(index.search(Query.parse("*?.pdf")).total, 1)
     }
 
+    func testRegexesThatLookEqualAreKeptApart() {
+        // "e" + U+0301 and "é" are equal Swift Strings but different patterns; the index form is precomposed.
+        let index = FileIndex()
+        let root = index.addRoot("/d")
+        index.add(ScannedEntry(name: "e\u{301}.txt", isDirectory: false, size: 1, modified: 0), parent: root)
+        index.sortIfNeeded(force: true)
+        let q = Query.parse("regex:^e\u{301}\\. | regex:^\u{E9}\\.")
+        XCTAssertEqual(CompiledQuery(q).regexes.count, 2)
+        XCTAssertEqual(index.search(q).total, 1)
+    }
+
     func testCaseWhereLowercaseDependsOnContext() {
         // "ΟΣ" lowercases to "ος" (final sigma), but a lone "Σ" to "σ": a lowercase first test would miss it.
         let index = FileIndex()
@@ -229,6 +240,123 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(index.search(Query.parse("case:*H*")).total, 1)
         XCTAssertEqual(index.search(Query.parse("!case:H *.rtf")).total, 0)
         XCTAssertEqual(index.search(Query.parse("case:h *.rtf")).total, 0)
+    }
+
+    func testGroups() {
+        // makeIndex names: /data, Reports, q1 report.pdf, Q2 Report.docx, film, game1.mp4, notes.txt.
+        let index = makeIndex()
+        XCTAssertEqual(names(index, "<report pdf> | notes"), ["notes.txt", "q1 report.pdf"])
+        XCTAssertEqual(names(index, "notes|<report pdf>"), ["notes.txt", "q1 report.pdf"])
+        XCTAssertEqual(index.search(Query.parse("!<report pdf>")).total, 6)
+        XCTAssertEqual(names(index, "<game | notes> !txt"), ["game1.mp4"])
+        XCTAssertEqual(names(index, "report <pdf | docx>"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "<<report>>"), names(index, "report"))
+        XCTAssertEqual(names(index, "<report"), names(index, "report")) // left open: closes at the end
+        XCTAssertEqual(names(index, "<>report"), names(index, "report"))
+        // Comparisons inside groups: ">" right after ":" compares, a later ">" closes.
+        XCTAssertEqual(names(index, "<size:>1gb>"), ["game1.mp4"])
+        XCTAssertEqual(names(index, "<size:<1kb file:> | game"), ["game1.mp4", "notes.txt", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "<regex:^game >"), ["game1.mp4"])
+        XCTAssertEqual(names(index, "<film/ file:>"), ["game1.mp4", "notes.txt"])
+        XCTAssertEqual(names(index, "<report folder:>|game"), ["game1.mp4", "Reports"])
+        XCTAssertEqual(names(index, "<file:>report"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "<file:><report>"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "<!size:>1gb file:>"), ["notes.txt", "q1 report.pdf", "Q2 Report.docx"])
+        // With no value after it, ">" closes: <size:> is an unreadable size: in its own group.
+        XCTAssertEqual(names(index, "<size:> report"), [])
+        XCTAssertEqual(names(index, "<size:>|notes"), ["notes.txt"])
+        XCTAssertEqual(names(index, "regex:(?<n>game)"), ["game1.mp4"])
+        // Any number of "!" before regex: keeps "|" inside the word, as before groups existed.
+        XCTAssertEqual(Query.tokenize("!!regex:a|b"), [.word("!!regex:a|b")])
+        XCTAssertEqual(Query.tokenize("!regex:a|b"), [.word("!regex:a|b")])
+        XCTAssertEqual(Query.tokenize("!<a>"), [.open(negated: true), .word("a"), .close])
+        XCTAssertEqual(Query.tokenize("!!<a>"), [.word("!!<a>")])
+        // !<file: report> = folders, or files without "report".
+        XCTAssertEqual(names(index, "!<file: report>"), ["/data", "film", "game1.mp4", "notes.txt", "Reports"])
+        // An unreadable term stays unreadable under negation: !<report size:enormous> is !report.
+        XCTAssertEqual(names(index, "!<report size:enormous>"), ["/data", "film", "game1.mp4", "notes.txt"])
+        // Outside a group "<" and ">" are text; inside quotes too.
+        XCTAssertEqual(Query.parse("report>").groups, [[.contains(Array("report>".utf8), negated: false)]])
+        XCTAssertEqual(Query.parse("\"<a>\"").groups, [[.contains(Array("<a>".utf8), negated: false)]])
+        // A path needle repeated by the expansion builds one table.
+        XCTAssertEqual(CompiledQuery(Query.parse("<q1 report> | film/")).pathTerms.count, 1)
+        XCTAssertEqual(names(index, "<q1 report> | film/"), ["game1.mp4", "notes.txt", "q1 report.pdf"])
+    }
+
+    func testGroupLimits() {
+        let index = makeIndex()
+        let eight = "<a b c d e f g h>"
+        XCTAssertEqual(Query.parse(eight + "|" + eight).groups.count, 64)
+        let sixteen = "<a b c d e f g h i j k l m n o p>"
+        let tooBig = Query.parse([sixteen, sixteen, sixteen].joined(separator: "|"))
+        XCTAssertEqual(tooBig.groups.count, 1)
+        XCTAssertEqual(index.search(tooBig).total, 0)
+        XCTAssertEqual(index.search(Query.parse(String(repeating: "<", count: 32) + "report")).total, 3)
+        XCTAssertEqual(index.search(Query.parse(String(repeating: "<", count: 33) + "report")).total, 0)
+        XCTAssertEqual(index.search(Query.parse(String(repeating: "!<", count: 50_000) + "report")).total, 0)
+        XCTAssertEqual(index.search(Query.parse(String(repeating: "<a>|", count: 50_000) + "report")).total, 0)
+        func zz(_ n: Int) -> String { Array(repeating: "zz", count: n).joined(separator: " ") }
+        // A regex repeated by the expansion is compiled once; distinct regexes and paths are capped.
+        let repeated = Query.parse("<regex:^q >|<" + zz(100) + ">")
+        XCTAssertEqual(repeated.groups.count, 100)
+        XCTAssertEqual(CompiledQuery(repeated).regexes.count, 1)
+        XCTAssertEqual(index.search(repeated).total, 2) // q1 report.pdf, Q2 Report.docx
+        // " | " with spaces: inside a regex: word "|" is alternation.
+        let sixteenRegexes = (1...16).map { "regex:x\($0)" }.joined(separator: " | ")
+        XCTAssertNotEqual(Query.parse(sixteenRegexes).groups, [[.invalid(sixteenRegexes)]])
+        let seventeenRegexes = sixteenRegexes + " | regex:x17"
+        XCTAssertEqual(Query.parse(seventeenRegexes).groups, [[.invalid(seventeenRegexes)]])
+        let sixteenPaths = (1...16).map { "p\($0)/" }.joined(separator: "|")
+        XCTAssertNotEqual(Query.parse(sixteenPaths).groups, [[.invalid(sixteenPaths)]])
+        XCTAssertEqual(Query.parse(sixteenPaths + "|p17/").groups, [[.invalid(sixteenPaths + "|p17/")]])
+        // A long needle repeated by the expansion is stored once.
+        let long = String(repeating: "y", count: 10_000)
+        let spread = Query.parse("<" + long + " q>|<" + zz(60) + ">")
+        XCTAssertEqual(spread.groups.count, 120)
+        XCTAssertLessThan(CompiledQuery(spread).bytes.count, 10_100)
+        // A long ext: list repeated by the expansion shares its slots...
+        let exts = "ext:" + (1...10).map { "e\($0)" }.joined(separator: ";") + ";mp4"
+        let manyExts = Query.parse("<" + exts + " q>|<" + zz(18) + ">") // 18 × 12 + 18 × 2 = 252 tests
+        XCTAssertEqual(manyExts.groups.count, 36)
+        XCTAssertEqual(CompiledQuery(manyExts).slotStart.count, 11)
+        XCTAssertEqual(index.search(manyExts).total, 0)
+        // ...but each copy is tested per record, so past 256 tests per record nothing matches.
+        let tooManyTests = "<" + exts + " q>|<" + zz(19) + ">" // 266 tests
+        XCTAssertEqual(Query.parse(tooManyTests).groups, [[.invalid(tooManyTests)]])
+        let ext256 = "ext:" + (1...256).map { "e\($0)" }.joined(separator: ";")
+        XCTAssertNotEqual(Query.parse(ext256).groups, [[.invalid(ext256)]])
+        let ext257 = ext256 + ";e257"
+        XCTAssertEqual(Query.parse(ext257).groups, [[.invalid(ext257)]])
+        let or257 = (1...257).map { "w\($0)" }.joined(separator: "|")
+        XCTAssertEqual(Query.parse(or257).groups, [[.invalid(or257)]])
+        // The limits hold for queries ANDed after parsing too (the search window adds its scope).
+        let filmPaths = Query.parse((["film/"] + (1...15).map { "p\($0)/" }).joined(separator: "|"))
+        let dataPaths = Query.parse((["data/"] + (1...15).map { "r\($0)/" }).joined(separator: "|"))
+        XCTAssertEqual(index.search(filmPaths).total, 2)
+        XCTAssertEqual(index.search(dataPaths).total, 6)
+        XCTAssertEqual(index.search(filmPaths.and(dataPaths)).total, 0)
+        let ext255txt = Query.parse("ext:" + (1...255).map { "e\($0)" }.joined(separator: ";") + ";txt")
+        XCTAssertEqual(index.search(ext255txt).total, 1) // notes.txt; 256 tests
+        XCTAssertEqual(index.search(Query.parse("notes").and(ext255txt)).total, 0) // 257 tests in all
+        // More words than the term cap match nothing, before any is read; at the test budget is fine.
+        XCTAssertEqual(index.search(Query.parse(zz(4097))).total, 0)
+        XCTAssertEqual(Query.parse(zz(256)).groups.count, 256)
+        XCTAssertEqual(Query.parse(zz(257)).groups, [[.invalid(zz(257))]])
+        // Long words full of ">" or "|" stay cheap: each check reads only the word's first characters.
+        let started = Date()
+        _ = Query.parse("<regex:" + String(repeating: ">", count: 60_000))
+        _ = Query.parse("<" + String(repeating: "!", count: 30_000) + String(repeating: ">", count: 30_000))
+        _ = Query.parse("<size" + String(repeating: ">", count: 60_000))
+        // Refused before the work: a huge ext: list is split only to 257 pieces, and 4,000 regex words
+        // are counted before any is compiled.
+        let hugeExt = "ext:" + (1...60_000).map { "e\($0)" }.joined(separator: ";")
+        XCTAssertEqual(Query.parse(hugeExt).groups, [[.invalid(hugeExt)]])
+        let manyRegexes = (1...4000).map { "regex:x\($0)" }.joined(separator: " ")
+        XCTAssertEqual(Query.parse(manyRegexes).groups, [[.invalid(manyRegexes)]])
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        // One pattern repeated counts once.
+        let sameRegex = Array(repeating: "regex:x", count: 40).joined(separator: " | ")
+        XCTAssertNotEqual(Query.parse(sameRegex).groups, [[.invalid(sameRegex)]])
     }
 
     func testSizeNamesAndRanges() {

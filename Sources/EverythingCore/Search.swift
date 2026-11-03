@@ -65,8 +65,12 @@ struct CompiledQuery {
     /// Per regex: the required literal's offset and length in `bytes` (length 0 when none).
     var regexLiteralStart: [Int] = []
     var regexLiteralLength: [Int] = []
-    /// Index into `terms` of each path: term; its PathTable is built per scan.
+    /// Index into `terms` of the first path: term for each needle; its PathTable is built per scan.
     var pathTerms: [Int] = []
+    /// Needle -> its PathTable, so a needle repeated by `< >` expansion builds one table.
+    private var pathTable: [[UInt8]: Int] = [:]
+    /// Pattern -> its index in `regexes`, for the same reason.
+    private var regexIndex: [[UInt8]: Int] = [:] // exact bytes, not String equality
     var hasRegex = false
     var hasTemp = false
 
@@ -78,11 +82,18 @@ struct CompiledQuery {
         }
     }
 
+    /// Adds `b` once: a needle repeated by `< >` expansion reuses its first copy, so `bytes` stays
+    /// no bigger than the distinct needles.
     private mutating func addBytes(_ b: [UInt8]) -> Int {
+        if let start = byteOffsets[b] { return start }
         let start = bytes.count
         bytes.append(contentsOf: b)
+        byteOffsets[b] = start
         return start
     }
+    private var byteOffsets: [[UInt8]: Int] = [:]
+    /// Extension list -> its first slot.
+    private var extSlots: [[[UInt8]]: Int] = [:]
 
     private static func cmpCode(_ c: Query.Comparison) -> UInt8 {
         switch c {
@@ -101,12 +112,24 @@ struct CompiledQuery {
             t.kind = Kind.contains; t.negated = neg; t.start = addBytes(n); t.length = n.count
         case let .pathContains(n, neg):
             t.kind = Kind.path; t.negated = neg; t.start = addBytes(n); t.length = n.count
-            t.b = Int64(pathTerms.count) // which PathTable
-            pathTerms.append(terms.count)
+            if let table = pathTable[n] {
+                t.b = Int64(table) // which PathTable
+            } else {
+                t.b = Int64(pathTerms.count)
+                pathTable[n] = pathTerms.count
+                pathTerms.append(terms.count)
+            }
         case let .glob(n, neg):
             t.kind = Kind.glob; t.negated = neg; t.start = addBytes(n); t.length = n.count
         case let .regex(pattern, neg):
-            t.kind = Kind.regex; t.negated = neg; t.start = regexes.count
+            t.kind = Kind.regex; t.negated = neg
+            // A pattern repeated by `< >` expansion shares one compiled regex and one set of hits.
+            if let k = regexIndex[Array(pattern.utf8)] {
+                t.start = k; t.a = Int64(regexLiteralStart[k]); t.b = Int64(regexLiteralLength[k])
+                return t
+            }
+            t.start = regexes.count
+            regexIndex[Array(pattern.utf8)] = regexes.count
             regexes.append(try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]))
             lineRegexes.append(RegexSupport.isLineSafe(pattern)
                 ? try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .anchorsMatchLines])
@@ -121,10 +144,17 @@ struct CompiledQuery {
             regexLiteralStart.append(Int(t.a))
             regexLiteralLength.append(Int(t.b))
         case let .ext(list, neg):
-            t.kind = Kind.ext; t.negated = neg; t.start = slotStart.count; t.length = list.count
-            for suffix in list {
-                slotStart.append(addBytes(suffix))
-                slotLength.append(suffix.count)
+            t.kind = Kind.ext; t.negated = neg; t.length = list.count
+            // A list repeated by `< >` expansion shares its slots.
+            if let first = extSlots[list] {
+                t.start = first
+            } else {
+                t.start = slotStart.count
+                extSlots[list] = slotStart.count
+                for suffix in list {
+                    slotStart.append(addBytes(suffix))
+                    slotLength.append(suffix.count)
+                }
             }
         case let .size(cmp, value, neg):
             t.kind = Kind.size; t.negated = neg; t.cmp = CompiledQuery.cmpCode(cmp); t.a = value
@@ -261,6 +291,8 @@ extension FileIndex {
 
     /// Scans records in memory order (sequential reads), split into chunks across cores.
     func matchingIdsInIdOrder(_ query: Query) -> [Int32] {
+        // Checked here too, not only in Query.parse: a search can AND queries (the window's scope).
+        guard Query.withinScanLimits(query.groups) else { return [] }
         let compiled = CompiledQuery(query)
         let count = records.count
         if count == 0 { return [] }

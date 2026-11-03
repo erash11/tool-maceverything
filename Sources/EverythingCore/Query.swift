@@ -40,48 +40,226 @@ public struct Query {
     /// Parses Everything-style syntax: `foo bar`, `"exact phrase"`, `a | b`, `!skip`, `*.pdf`,
     /// `ext:pdf;docx`, `path:Football`, `drive:Work`, `size:>1gb`, `dm:today`, `regex:^IMG_\d+`,
     /// `file:`, `folder:`; modifiers `case:Report`, `ww:report`, `wfn:notes.txt`, `startwith:q`,
-    /// `endwith:.txt`; `len:>200`.
+    /// `endwith:.txt`; `len:>200`; groups `<a b> | c`, `!<a b>`.
     public static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> Query {
-        var groups: [[Term]] = []
-        var joinNext = false
-        for token in tokenize(text) {
-            if token == "|" {
-                joinNext = !groups.isEmpty
-                continue
+        // An explicit stack, not recursion: `<<<<…` can't run deep.
+        struct Frame {
+            var groups: [[Node]] = []
+            var joinNext = false
+            var negated = false
+            /// The group's meaning, or nil when it is empty (`<>`).
+            var node: Node? {
+                if groups.isEmpty { return nil }
+                let all = Node.all(groups.map { $0.count == 1 ? $0[0] : .any($0) })
+                return negated ? .not(all) : all
             }
-            let term = parseTerm(token, now: now, calendar: calendar)
-            if joinNext, !groups.isEmpty {
-                groups[groups.count - 1].append(term)
-            } else {
-                groups.append([term])
+            mutating func add(_ node: Node) {
+                if joinNext, !groups.isEmpty { groups[groups.count - 1].append(node) } else { groups.append([node]) }
+                joinNext = false
             }
-            joinNext = false
+        }
+        var stack = [Frame()]
+        func close() {
+            let frame = stack.removeLast()
+            if let node = frame.node { stack[stack.count - 1].add(node) }
+        }
+        let tokens = tokenize(text)
+        // Every word is at least one term, so past maxTestsPerRecord words the query can't fit:
+        // stop before reading any of them (each regex: word compiles a regex to check it).
+        var words = 0
+        // Distinct regex patterns too, before parseTerm compiles any (it strips one "!", as here).
+        var patterns = Set<[UInt8]>() // exact bytes: "é" and "e" + U+0301 are different patterns
+        for case let .word(w) in tokens {
+            words += 1
+            let body = w.hasPrefix("!") && w.count > 1 ? w.dropFirst() : w[...]
+            if body.prefix(6).lowercased() == "regex:" { patterns.insert(Array(body.dropFirst(6).utf8)) }
+        }
+        if words > maxTestsPerRecord || patterns.count > maxDistinctRegexes { return Query(groups: [[.invalid(text)]]) }
+        for token in tokens {
+            switch token {
+            case .or:
+                stack[stack.count - 1].joinNext = !stack[stack.count - 1].groups.isEmpty
+            case let .open(negated):
+                if stack.count > maxGroupDepth { return Query(groups: [[.invalid(text)]]) }
+                stack.append(Frame(negated: negated))
+            case .close:
+                if stack.count > 1 { close() } // tokenize only emits a close inside a group
+            case let .word(w):
+                stack[stack.count - 1].add(.term(parseTerm(w, now: now, calendar: calendar)))
+            }
+        }
+        while stack.count > 1 { close() } // groups left open close at the end
+        guard let root = stack[0].node else { return Query(groups: []) }
+        var size = 0
+        guard let groups = conjunctive(root, negate: false, size: &size), withinScanLimits(groups) else {
+            return Query(groups: [[.invalid(text)]])
         }
         return Query(groups: groups)
     }
 
-    static func tokenize(_ text: String) -> [String] {
-        var tokens: [String] = []
+    /// A query before it is flattened: `<a b> | c` is any([all([a, b]), c]).
+    indirect enum Node {
+        case term(Term)
+        case all([Node])
+        case any([Node])
+        case not(Node)
+    }
+
+    /// Deepest `< >` nesting read; deeper matches nothing.
+    static let maxGroupDepth = 32
+    /// Most terms a query may expand to. `<a b> | <c d>` expands to (a|c)(a|d)(b|c)(b|d), so each
+    /// more OR of groups multiplies; past this the query matches nothing.
+    static let maxExpandedTerms = 4096
+
+    /// Each distinct regex keeps a byte per record during a search, and each distinct path needle
+    /// a table of about 5 bytes per record (14 MB per needle on a 2.85M-entry index), so a query
+    /// may hold only this many of each; past it, it matches nothing.
+    static let maxDistinctRegexes = 16
+    static let maxDistinctPaths = 16
+
+    /// The most tests one record may need: each term is one, an `ext:` term one per extension (an
+    /// `ext:` list repeated by `< >` expansion is tested again in every group it lands in). Measured on
+    /// 2.85M entries under load: about 13 ms per name test and 1 ms per extension, so 256 keeps the
+    /// worst search to a few seconds. The window's type filter uses up to ~70 (Document).
+    static let maxTestsPerRecord = 256
+
+    static func withinScanLimits(_ groups: [[Term]]) -> Bool {
+        var regexes = Set<[UInt8]>(), paths = Set<[UInt8]>()
+        var tests = 0
+        for term in groups.joined() {
+            if case let .regex(p, _) = term { regexes.insert(Array(p.utf8)) }
+            if case let .pathContains(b, _) = term { paths.insert(b) }
+            if case let .ext(list, _) = term { tests += list.count } else { tests += 1 }
+        }
+        return regexes.count <= maxDistinctRegexes && paths.count <= maxDistinctPaths && tests <= maxTestsPerRecord
+    }
+
+    /// `node` (negated when `negate`) as groups ANDed of terms ORed, the form the search runs.
+    /// Negation moves down to the terms (De Morgan). Returns nil past maxExpandedTerms.
+    static func conjunctive(_ node: Node, negate: Bool, size: inout Int) -> [[Term]]? {
+        switch node {
+        case let .term(t):
+            size += 1
+            return size > maxExpandedTerms ? nil : [[negate ? negated(t) : t]]
+        case let .not(inner):
+            return conjunctive(inner, negate: !negate, size: &size)
+        case let .all(nodes) where !negate, let .any(nodes) where negate:
+            var out: [[Term]] = []
+            for n in nodes {
+                guard let part = conjunctive(n, negate: negate, size: &size) else { return nil }
+                out += part
+            }
+            return out
+        case let .all(nodes), let .any(nodes):
+            // An OR of parts: every way to pick one group from each part, joined.
+            var out: [[Term]] = [[]]
+            for n in nodes {
+                var partSize = 0
+                guard let part = conjunctive(n, negate: negate, size: &partSize) else { return nil }
+                let count = out.reduce(0) { $0 + $1.count } * part.count + part.reduce(0) { $0 + $1.count } * out.count
+                guard count <= maxExpandedTerms else { return nil }
+                out = out.flatMap { a in part.map { a + $0 } }
+            }
+            size += out.reduce(0) { $0 + $1.count }
+            return size > maxExpandedTerms ? nil : out
+        }
+    }
+
+    /// `!t`. A term that can't be read stays unreadable: it matches nothing either way.
+    static func negated(_ t: Term) -> Term {
+        switch t {
+        case let .contains(b, n): return .contains(b, negated: !n)
+        case let .pathContains(b, n): return .pathContains(b, negated: !n)
+        case let .glob(b, n): return .glob(b, negated: !n)
+        case let .regex(p, n): return .regex(p, negated: !n)
+        case let .ext(list, n): return .ext(list, negated: !n)
+        case let .size(c, v, n): return .size(c, v, negated: !n)
+        case let .sizeRange(c, lo, hi, n): return .sizeRange(c, lo, hi, negated: !n)
+        case let .modified(c, a, b, n): return .modified(c, a, b, negated: !n)
+        case let .cased(b, g, n): return .cased(b, glob: g, negated: !n)
+        case let .wholeWord(b, n): return .wholeWord(b, negated: !n)
+        case let .length(c, v, n): return .length(c, v, negated: !n)
+        case .filesOnly: return .foldersOnly
+        case .foldersOnly: return .filesOnly
+        case let .temp(n): return .temp(negated: !n)
+        case .invalid: return t
+        }
+    }
+
+    enum Token: Equatable {
+        case word(String)
+        case or
+        case open(negated: Bool)
+        case close
+    }
+
+    /// Splits on spaces, `|` and `< >`. Quotes keep everything inside as one word. `<` opens a group
+    /// only at a word's start (`!<` negates it); `>` closes one only inside a group, never inside a
+    /// `regex:` word (end it with a space: `<regex:a >`), and not right after `size:`, `dm:` or `len:`
+    /// (`<size:>1gb>` compares, then closes; `<file:>report` closes after `file:`).
+    static func tokenize(_ text: String) -> [Token] {
+        var tokens: [Token] = []
         var current = ""
+        // The current word as it grows, kept so each check reads a few characters, not the word:
+        // its leading "!"s, its first 7 characters after them, and its length in characters.
+        var bangs = 0, head = "", length = 0
         var inQuotes = false
-        for ch in text {
+        var depth = 0
+        func add(_ ch: Character) {
+            current.append(ch)
+            if ch == "!" && length == bangs { bangs += 1 } else if head.count < 7 { head.append(ch) }
+            length += 1
+        }
+        func reset() { current = ""; bangs = 0; head = ""; length = 0 }
+        func flush() {
+            if !current.isEmpty { tokens.append(.word(current)) }
+            reset()
+        }
+        // Any number of leading "!" (as before: "!!regex:a|b" stays one word).
+        func inRegex() -> Bool { head.lowercased().hasPrefix("regex:") }
+        // The filters whose value can start with ">": there, `>` compares instead of closing.
+        func isComparisonFilter() -> Bool {
+            bangs <= 1 && length == bangs + head.count && ["size:", "dm:", "len:"].contains(head.lowercased())
+        }
+        let chars = Array(text)
+        for (i, ch) in chars.enumerated() {
             if ch == "\"" {
                 inQuotes.toggle()
                 continue
             }
-            if !inQuotes && (ch == " " || ch == "\t" || ch == "\n") {
-                if !current.isEmpty { tokens.append(current); current = "" }
+            if inQuotes {
+                add(ch)
+                continue
+            }
+            if ch == " " || ch == "\t" || ch == "\n" {
+                flush()
                 continue
             }
             // "|" separates alternatives, except inside a regex: term, where it is alternation.
-            if !inQuotes && ch == "|" && !current.lowercased().drop(while: { $0 == "!" }).hasPrefix("regex:") {
-                if !current.isEmpty { tokens.append(current); current = "" }
-                tokens.append("|")
+            if ch == "|" && !inRegex() {
+                flush()
+                tokens.append(.or)
                 continue
             }
-            current.append(ch)
+            if ch == "<" && length == bangs && bangs <= 1 {
+                tokens.append(.open(negated: bangs == 1))
+                reset() // the "!" belongs to the group
+                depth += 1
+                continue
+            }
+            // After size:/dm:/len:, ">" compares only when a value follows it; `<size:>` closes.
+            if ch == ">" && depth > 0 && !inRegex() {
+                let valueFollows = i + 1 < chars.count && !" \t\n|>".contains(chars[i + 1])
+                if !(valueFollows && isComparisonFilter()) {
+                    flush()
+                    tokens.append(.close)
+                    depth -= 1
+                    continue
+                }
+            }
+            add(ch)
         }
-        if !current.isEmpty { tokens.append(current) }
+        flush()
         return tokens
     }
 
@@ -130,8 +308,10 @@ public struct Query {
             return .length(cmp, n, negated: negated)
         }
         if lower.hasPrefix("ext:") {
-            let exts = lower.dropFirst(4).split(separator: ";").map { Array(("." + $0).utf8) }
-            return exts.isEmpty ? .invalid(raw) : .ext(exts, negated: negated)
+            // Split no further than the test budget allows: one more piece means the list is too long.
+            let parts = lower.dropFirst(4).split(separator: ";", maxSplits: maxTestsPerRecord)
+            guard !parts.isEmpty, parts.count <= maxTestsPerRecord else { return .invalid(raw) }
+            return .ext(parts.map { Array(("." + $0).utf8) }, negated: negated)
         }
         if lower.hasPrefix("drive:") {
             // drive:CRASHBOX means everything under /Volumes/CRASHBOX.
