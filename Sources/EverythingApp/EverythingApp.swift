@@ -504,16 +504,18 @@ struct SearchView: View {
                     model.setSort(key, descending: descending)
                 }
             }
+            // Each action takes only rows of the current search, checked when it runs: the rows of an
+            // earlier search stay on screen until the new one arrives.
             .contextMenu(forSelectionType: String.self) { paths in
-                Button("Open") { open(paths, reveal: false) }
-                Button("Reveal in Finder") { open(paths, reveal: true) }
+                Button("Open") { act(on: paths) { open($0, reveal: false) } }
+                Button("Reveal in Finder") { act(on: paths) { open($0, reveal: true) } }
                 Divider()
-                Button("Copy") { copyFiles(paths) }
-                Button("Copy Path") { copy(paths) }
+                Button("Copy") { act(on: paths, copyFiles) }
+                Button("Copy Path") { act(on: paths, copy) }
                 Divider()
-                Button("Move to Trash") { moveToTrash(paths) }
+                Button("Move to Trash") { act(on: paths, moveToTrash) }
             } primaryAction: { paths in
-                open(paths, reveal: false)
+                act(on: paths) { open($0, reveal: false) }
             }
     }
 
@@ -541,8 +543,7 @@ struct SearchView: View {
                 default: action = nil
                 }
                 if let action {
-                    let rows = currentSelection()
-                    if rows.isEmpty { NSSound.beep() } else { action(rows) }
+                    act(on: selection, action)
                     return nil
                 }
             }
@@ -572,11 +573,12 @@ struct SearchView: View {
         window?.identifier == panelID && window?.firstResponder is NSTableView
     }
 
-    /// The selected rows that belong to the current search (none while rows of an earlier one are
-    /// still shown), so a command never acts on a file that doesn't match what was typed.
-    private func currentSelection() -> Set<String> {
-        guard model.hitsAreCurrent else { return [] }
-        return selection.intersection(model.hits.map(\.path))
+    /// Runs a file command on the rows of `paths` that belong to the current search (none while rows
+    /// of an earlier one are still shown), so it never acts on a file that doesn't match what was
+    /// typed; with none left, beeps and does nothing.
+    private func act(on paths: Set<String>, _ action: (Set<String>) -> Void) {
+        let rows = model.hitsAreCurrent ? paths.intersection(model.hits.map(\.path)) : []
+        if rows.isEmpty { NSSound.beep() } else { action(rows) }
     }
 
     /// Whether `window` is the search panel and a text field's editor (the search box: the
