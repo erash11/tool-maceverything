@@ -293,6 +293,17 @@ final class IndexTests: XCTestCase {
         let spread = Query.parse("<" + long + " q>|<" + Array(repeating: "zz", count: 1000).joined(separator: " ") + ">")
         XCTAssertEqual(spread.groups.count, 2000)
         XCTAssertLessThan(CompiledQuery(spread).bytes.count, 10_100)
+        // A long ext: list repeated by the expansion shares its slots.
+        let exts = "ext:" + (1...2000).map { "e\($0)" }.joined(separator: ";") + ";mp4"
+        let manyExts = Query.parse("<" + exts + " q>|<" + Array(repeating: "zz", count: 1000).joined(separator: " ") + ">")
+        XCTAssertEqual(CompiledQuery(manyExts).slotStart.count, 2001)
+        XCTAssertEqual(index.search(manyExts).total, 0)
+        // The limits hold for queries ANDed after parsing too (the search window adds its scope).
+        let filmPaths = Query.parse((["film/"] + (1...15).map { "p\($0)/" }).joined(separator: "|"))
+        let dataPaths = Query.parse((["data/"] + (1...15).map { "r\($0)/" }).joined(separator: "|"))
+        XCTAssertEqual(index.search(filmPaths).total, 2)
+        XCTAssertEqual(index.search(dataPaths).total, 6)
+        XCTAssertEqual(index.search(filmPaths.and(dataPaths)).total, 0)
         // More words than the term cap match nothing, before any is read; at the cap is fine.
         XCTAssertEqual(index.search(Query.parse(Array(repeating: "zz", count: 4097).joined(separator: " "))).total, 0)
         XCTAssertEqual(Query.parse(Array(repeating: "zz", count: 4096).joined(separator: " ")).groups.count, 4096)

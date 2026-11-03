@@ -92,6 +92,8 @@ struct CompiledQuery {
         return start
     }
     private var byteOffsets: [[UInt8]: Int] = [:]
+    /// Extension list -> its first slot.
+    private var extSlots: [[[UInt8]]: Int] = [:]
 
     private static func cmpCode(_ c: Query.Comparison) -> UInt8 {
         switch c {
@@ -142,10 +144,17 @@ struct CompiledQuery {
             regexLiteralStart.append(Int(t.a))
             regexLiteralLength.append(Int(t.b))
         case let .ext(list, neg):
-            t.kind = Kind.ext; t.negated = neg; t.start = slotStart.count; t.length = list.count
-            for suffix in list {
-                slotStart.append(addBytes(suffix))
-                slotLength.append(suffix.count)
+            t.kind = Kind.ext; t.negated = neg; t.length = list.count
+            // A list repeated by `< >` expansion shares its slots.
+            if let first = extSlots[list] {
+                t.start = first
+            } else {
+                t.start = slotStart.count
+                extSlots[list] = slotStart.count
+                for suffix in list {
+                    slotStart.append(addBytes(suffix))
+                    slotLength.append(suffix.count)
+                }
             }
         case let .size(cmp, value, neg):
             t.kind = Kind.size; t.negated = neg; t.cmp = CompiledQuery.cmpCode(cmp); t.a = value
@@ -282,6 +291,8 @@ extension FileIndex {
 
     /// Scans records in memory order (sequential reads), split into chunks across cores.
     func matchingIdsInIdOrder(_ query: Query) -> [Int32] {
+        // Checked here too, not only in Query.parse: a search can AND queries (the window's scope).
+        guard Query.withinScanLimits(query.groups) else { return [] }
         let compiled = CompiledQuery(query)
         let count = records.count
         if count == 0 { return [] }
