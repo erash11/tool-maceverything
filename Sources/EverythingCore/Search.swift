@@ -50,6 +50,7 @@ struct CompiledQuery {
         static let contains: UInt8 = 0, path: UInt8 = 1, glob: UInt8 = 2, regex: UInt8 = 3, ext: UInt8 = 4
         static let size: UInt8 = 5, modified: UInt8 = 6, files: UInt8 = 7, folders: UInt8 = 8
         static let temp: UInt8 = 9, never: UInt8 = 10, sizeRange: UInt8 = 11
+        static let cased: UInt8 = 12, casedGlob: UInt8 = 13, word: UInt8 = 14, length: UInt8 = 15
     }
 
     var terms: [Term] = []
@@ -131,6 +132,14 @@ struct CompiledQuery {
             t.kind = Kind.sizeRange; t.negated = neg; t.cmp = CompiledQuery.cmpCode(cmp); t.a = low; t.b = high
         case let .modified(cmp, start, end, neg):
             t.kind = Kind.modified; t.negated = neg; t.cmp = CompiledQuery.cmpCode(cmp); t.a = start; t.b = end
+        case let .cased(low, cased, glob, neg):
+            t.kind = glob ? Kind.casedGlob : Kind.cased; t.negated = neg
+            t.start = addBytes(low); t.length = low.count
+            t.a = Int64(addBytes(cased)); t.b = Int64(cased.count)
+        case let .wholeWord(n, neg):
+            t.kind = Kind.word; t.negated = neg; t.start = addBytes(n); t.length = n.count
+        case let .length(cmp, n, neg):
+            t.kind = Kind.length; t.negated = neg; t.cmp = CompiledQuery.cmpCode(cmp); t.a = n
         case .filesOnly:
             t.kind = Kind.files
         case .foldersOnly:
@@ -264,6 +273,7 @@ extension FileIndex {
         let temp = compiled.hasTemp ? tempMask() : []
 
         records.withUnsafeBufferPointer { recs in
+        names.withUnsafeBufferPointer { nameBytes in
         lowerNames.withUnsafeBufferPointer { lower in
         compiled.terms.withUnsafeBufferPointer { terms in
         compiled.bytes.withUnsafeBufferPointer { qbytes in
@@ -279,7 +289,7 @@ extension FileIndex {
             }
             let views = tables.map(\.view)
             views.withUnsafeBufferPointer { pathViews in
-            let ctx = MatchContext(recs: recs, lower: lower, terms: terms, qbytes: qbytes,
+            let ctx = MatchContext(recs: recs, names: nameBytes, lower: lower, terms: terms, qbytes: qbytes,
                                    slotStart: slotStart, slotLength: slotLength,
                                    groupStart: groupStart, groupCount: groupCount,
                                    regexes: compiled.regexes, pathViews: pathViews, temp: tempMask)
@@ -309,7 +319,7 @@ extension FileIndex {
             }
             }
             withExtendedLifetime(tables) {}
-        }}}}}}}}}}
+        }}}}}}}}}}}
         return partial.flatMap { $0 }
     }
 }
@@ -317,6 +327,8 @@ extension FileIndex {
 /// Everything the per-record test reads, as unsafe buffers.
 struct MatchContext {
     let recs: UnsafeBufferPointer<Record>
+    /// Names as stored (case kept), for case:.
+    let names: UnsafeBufferPointer<UInt8>
     let lower: UnsafeBufferPointer<UInt8>
     let terms: UnsafeBufferPointer<CompiledQuery.Term>
     let qbytes: UnsafeBufferPointer<UInt8>
@@ -337,6 +349,23 @@ struct MatchContext {
         case 2: return v > target
         case 3: return v >= target
         default: return v == target
+        }
+    }
+
+    /// case: on the name as stored. ASCII names are read in place; others are precomposed first,
+    /// because macOS stores accents decomposed while typed text is precomposed.
+    func casedMatch(_ r: Record, glob: Bool, nStart: Int, n: Int) -> Bool {
+        let s = Int(r.nameStart), len = Int(r.nameLength)
+        var ascii = true
+        var i = s
+        while i < s + len { if names[i] >= 0x80 { ascii = false; break }; i += 1 }
+        if ascii {
+            return glob ? globBytes(names, s, len, qbytes, nStart, n) : containsBytes(names, s, len, qbytes, nStart, n)
+        }
+        let stored = String(decoding: UnsafeBufferPointer(rebasing: names[s..<s + len]), as: UTF8.self)
+        let form = Array(stored.precomposedStringWithCanonicalMapping.utf8)
+        return form.withUnsafeBufferPointer {
+            glob ? globBytes($0, 0, $0.count, qbytes, nStart, n) : containsBytes($0, 0, $0.count, qbytes, nStart, n)
         }
     }
 
@@ -407,6 +436,16 @@ struct MatchContext {
                     hit = temp[id] != 0
                 case CompiledQuery.Kind.never:
                     hit = false
+                case CompiledQuery.Kind.cased, CompiledQuery.Kind.casedGlob:
+                    // The lowercase test first: it is cheap and rules out most names.
+                    let glob = t.kind == CompiledQuery.Kind.casedGlob
+                    hit = glob ? globBytes(lower, start, len, qbytes, t.start, t.length)
+                               : containsBytes(lower, start, len, qbytes, t.start, t.length)
+                    if hit { hit = casedMatch(r, glob: glob, nStart: Int(t.a), n: Int(t.b)) }
+                case CompiledQuery.Kind.word:
+                    hit = wordBytes(lower, start, len, qbytes, t.start, t.length)
+                case CompiledQuery.Kind.length:
+                    hit = compare(characterCount(lower, start, len), t.cmp, t.a)
                 default:
                     hit = r.flags & 1 != 0
                 }
@@ -440,6 +479,47 @@ func containsBytes(_ hay: UnsafeBufferPointer<UInt8>, _ start: Int, _ len: Int,
         i += 1
     }
     return false
+}
+
+/// A letter or digit, for ww:. Bytes of non-ASCII characters count as letters; `_`, `-`, `.`,
+/// spaces and other ASCII punctuation separate words.
+@inline(__always)
+func isWordByte(_ b: UInt8) -> Bool {
+    b >= 0x80 || (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
+}
+
+/// containsBytes, where the match must start and end at a word edge: the name's start or end, or
+/// a separator byte next to it (see isWordByte).
+func wordBytes(_ hay: UnsafeBufferPointer<UInt8>, _ start: Int, _ len: Int,
+               _ needle: UnsafeBufferPointer<UInt8>, _ nStart: Int, _ n: Int) -> Bool {
+    if n == 0 || n > len { return false }
+    let first = needle[nStart]
+    let end = start + len
+    var i = start
+    while i <= end - n {
+        if hay[i] == first {
+            var j = 1
+            while j < n && hay[i + j] == needle[nStart + j] { j += 1 }
+            if j == n && (i == start || !isWordByte(hay[i - 1])) && (i + n == end || !isWordByte(hay[i + n])) {
+                return true
+            }
+        }
+        i += 1
+    }
+    return false
+}
+
+/// Characters (Unicode scalars) in a UTF-8 name: every byte that doesn't continue a character.
+/// shortcut: an accent that has no precomposed form, or an emoji sequence, counts as several.
+@inline(__always)
+func characterCount(_ hay: UnsafeBufferPointer<UInt8>, _ start: Int, _ len: Int) -> Int64 {
+    var count: Int64 = 0
+    var i = start
+    while i < start + len {
+        if hay[i] & 0xC0 != 0x80 { count += 1 }
+        i += 1
+    }
+    return count
 }
 
 /// Matches `*` and `?` against the whole name.

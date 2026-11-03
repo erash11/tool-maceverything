@@ -17,6 +17,13 @@ public struct Query {
         /// `>` above it, `>=` from its low end, `<` below it, `<=` up to its high end.
         case sizeRange(Comparison, Int64, Int64, negated: Bool)
         case modified(Comparison, Int64, Int64, negated: Bool) // [start, end) seconds since 1970
+        /// `case:Report`: the name holds this text with this case. `lower` finds candidates; `cased`
+        /// (precomposed, case kept) is then checked against the name as stored. `glob` = whole-name wildcards.
+        case cased(lower: [UInt8], cased: [UInt8], glob: Bool, negated: Bool)
+        /// `ww:report`: the name holds this text as a whole word (see wordBytes).
+        case wholeWord([UInt8], negated: Bool)
+        /// `len:>200`: the name's length in characters.
+        case length(Comparison, Int64, negated: Bool)
         case filesOnly
         case foldersOnly
         /// Temp and generated files, and everything inside temp folders (see TempFiles).
@@ -32,7 +39,8 @@ public struct Query {
 
     /// Parses Everything-style syntax: `foo bar`, `"exact phrase"`, `a | b`, `!skip`, `*.pdf`,
     /// `ext:pdf;docx`, `path:Football`, `drive:Work`, `size:>1gb`, `dm:today`, `regex:^IMG_\d+`,
-    /// `file:`, `folder:`.
+    /// `file:`, `folder:`; modifiers `case:Report`, `ww:report`, `wfn:notes.txt`, `startwith:q`,
+    /// `endwith:.txt`; `len:>200`.
     public static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> Query {
         var groups: [[Term]] = []
         var joinNext = false
@@ -93,6 +101,35 @@ public struct Query {
         if let filter = FileFilter.forKeyword(lower), let list = FileFilter.extensions[filter] {
             return .ext(list.map { Array(("." + $0).utf8) }, negated: negated)
         }
+        if let modifier = textModifiers.first(where: { lower.hasPrefix($0) }) {
+            // The modifier is ASCII, so dropping its length from `token` keeps the value's case.
+            let value = String(token.dropFirst(modifier.count))
+            let low = FileIndex.searchForm(value)
+            let wild = low.contains("*") || low.contains("?")
+            // shortcut: one modifier per term, name text only; chain them (`case:ww:x`) or allow
+            // paths when asked. Until then those match nothing, not the literal text.
+            guard !low.isEmpty, !low.contains("/"), !textModifiers.contains(where: { low.hasPrefix($0) }) else {
+                return .invalid(raw)
+            }
+            switch modifier {
+            case "case:":
+                return .cased(lower: Array(low.utf8), cased: Array(value.precomposedStringWithCanonicalMapping.utf8),
+                              glob: wild, negated: negated)
+            case "ww:", "wholeword:":
+                return wild ? .invalid(raw) : .wholeWord(Array(low.utf8), negated: negated)
+            // Wildcards inside the value keep their meaning.
+            case "startwith:": return .glob(Array((low + "*").utf8), negated: negated)
+            case "endwith:": return .glob(Array(("*" + low).utf8), negated: negated)
+            default: return .glob(Array(low.utf8), negated: negated) // wfn: with no wildcard is the exact name
+            }
+        }
+        if lower.hasPrefix("len:") {
+            let (cmp, rest) = comparison(String(lower.dropFirst(4)))
+            guard !rest.isEmpty, rest.allSatisfy({ $0.isASCII && $0.isNumber }), let n = Int64(rest) else {
+                return .invalid(raw)
+            }
+            return .length(cmp, n, negated: negated)
+        }
         if lower.hasPrefix("ext:") {
             let exts = lower.dropFirst(4).split(separator: ";").map { Array(("." + $0).utf8) }
             return exts.isEmpty ? .invalid(raw) : .ext(exts, negated: negated)
@@ -141,6 +178,9 @@ public struct Query {
         }
         return .contains(Array(lower.utf8), negated: negated)
     }
+
+    /// Everything's text modifiers, as typed (lowercase).
+    static let textModifiers = ["case:", "ww:", "wholeword:", "wfn:", "wholefilename:", "startwith:", "endwith:"]
 
     static func comparison(_ s: String) -> (Comparison, String) {
         if s.hasPrefix(">=") { return (.greaterOrEqual, String(s.dropFirst(2))) }

@@ -148,7 +148,9 @@ final class IndexTests: XCTestCase {
                   "report dm:nonsense", "report | size:enormous", "size:enormous | dm:nonsense",
                   "regex:([", "!regex:([", "report | !regex:([", "dm:2026-10-x-15", "!dm:2026-10-x-15",
                   "dm:2026-02-30", "!dm:2026-1x-01", "dm:-2026-10-15", "dm:2026-13", "dm:last0days",
-                  "dm:last3fortnights", "dm:2026..", "size:..5mb"] {
+                  "dm:last3fortnights", "dm:2026..", "size:..5mb",
+                  "case:", "!case:", "ww:", "wfn:", "startwith:", "endwith:", "ww:rep*", "case:ww:Report",
+                  "case:a/b", "!ww:x/y", "len:", "len:abc", "len:>", "len:-1", "len:99999999999999999999"] {
             let r = index.search(Query.parse(q))
             XCTAssertEqual(r.total, q.hasPrefix("report |") ? 3 : 0, q)
         }
@@ -158,6 +160,46 @@ final class IndexTests: XCTestCase {
         }
         XCTAssertEqual(Query.parse("size:enormous").groups, [[.invalid("size:enormous")]])
         XCTAssertEqual(Query.parse("!dm:lastfortnight").groups, [[.invalid("!dm:lastfortnight")]])
+    }
+
+    func testTextModifiers() {
+        // makeIndex names: /data, Reports, q1 report.pdf, Q2 Report.docx, film, game1.mp4, notes.txt.
+        let index = makeIndex()
+        XCTAssertEqual(names(index, "case:Report"), ["Q2 Report.docx", "Reports"])
+        XCTAssertEqual(names(index, "CASE:report"), ["q1 report.pdf"])
+        XCTAssertEqual(names(index, "report !case:Report"), ["q1 report.pdf"])
+        XCTAssertEqual(names(index, "case:Q?*"), ["Q2 Report.docx"])
+        XCTAssertEqual(names(index, "ww:report"), ["q1 report.pdf", "Q2 Report.docx"]) // not Reports
+        XCTAssertEqual(names(index, "wholeword:REPORT"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "ww:game"), []) // in game1 the digit is part of the word
+        XCTAssertEqual(names(index, "ww:mp4"), ["game1.mp4"])
+        XCTAssertEqual(names(index, "ww:\"q1 report\""), ["q1 report.pdf"])
+        XCTAssertEqual(names(index, "!ww:report file:"), ["game1.mp4", "notes.txt"])
+        XCTAssertEqual(names(index, "wfn:notes.txt"), ["notes.txt"])
+        XCTAssertEqual(names(index, "wholefilename:NOTES.TXT"), ["notes.txt"])
+        XCTAssertEqual(names(index, "wfn:notes"), [])
+        XCTAssertEqual(names(index, "startwith:q"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "startwith:report"), ["Reports"])
+        XCTAssertEqual(names(index, "endwith:.txt"), ["notes.txt"])
+        XCTAssertEqual(names(index, "len:9"), ["game1.mp4", "notes.txt"])
+        XCTAssertEqual(names(index, "len:>12"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "len:<5"), ["film"])
+        XCTAssertEqual(names(index, "!len:<=12 file:"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(Query.parse("image:").groups, Query.parse("pic:").groups)
+        XCTAssertEqual(Query.parse("!IMAGE:").groups, Query.parse("!pic:").groups)
+    }
+
+    func testCaseAndLengthWithAccents() {
+        // macOS stores accents decomposed (e + U+0301); typed text is precomposed (U+00E9).
+        let index = FileIndex()
+        let root = index.addRoot("/d")
+        index.add(ScannedEntry(name: "Re\u{301}sume\u{301}.pdf", isDirectory: false, size: 1, modified: 0), parent: root)
+        index.sortIfNeeded(force: true)
+        XCTAssertEqual(index.search(Query.parse("case:R\u{E9}sum\u{E9}")).total, 1)
+        XCTAssertEqual(index.search(Query.parse("case:r\u{E9}sum\u{E9}")).total, 0)
+        XCTAssertEqual(index.search(Query.parse("ww:r\u{E9}sum\u{E9}")).total, 1)
+        XCTAssertEqual(index.search(Query.parse("ww:r\u{E9}sum")).total, 0) // an accented letter is a letter
+        XCTAssertEqual(index.search(Query.parse("len:10")).total, 1) // 10 characters, 12 bytes
     }
 
     func testSizeNamesAndRanges() {

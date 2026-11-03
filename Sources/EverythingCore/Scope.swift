@@ -160,6 +160,7 @@ public enum FileFilter: String, CaseIterable, Hashable {
 
     /// The filter a typed keyword names (`audio:`, `zip:`, `doc:`, `exe:`, `pic:`, `video:`).
     static func forKeyword(_ lower: String) -> FileFilter? {
-        allCases.first { $0 != .folder && $0.keyword == lower }
+        if lower == "image:" { return .picture } // Everything's other name for pic:
+        return allCases.first { $0 != .folder && $0.keyword == lower }
     }
 }

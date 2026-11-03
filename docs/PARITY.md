@@ -10,7 +10,7 @@ Everything features come from voidtools' own docs (1.4, plus 1.5 alpha where mar
 The 10 gaps most likely to make it feel broken for someone coming from Everything, worst first:
 
 1. **Fixed 2026-11-03: unreadable values match nothing (PR #13), and the common values now work (PR #15): `dm:lastweek`, `dm:2026`, `dm:a..b`, `size:huge`, `size:10mb..50mb`.** Was: **Search terms the parser can't read return everything.** Unparsed values are dropped, so `dm:lastweek`, `dm:7days`, `dm:2026`, `size:10mb..50mb` and `size:huge` each return all 2.59M entries, with no error.
-2. **Functions and modifiers it doesn't know become literal text, so they return 0.** `case:`, `parent:`, `ww:`, `dc:`, `empty:`, `type:`, `image:` and `<…>` grouping return 0 results, with no error.
+2. **Started 2026-11-03: `case:`, `ww:`, `wfn:`, `startwith:`, `endwith:`, `len:`, `image:` work (PR A); next `< >` grouping (PR B), then `parent:`/`depth:`/`empty:`/`childcount:` (PR C); `type:` and `dc:` later.** Was: **Functions and modifiers it doesn't know become literal text, so they return 0.** `case:`, `parent:`, `ww:`, `dc:`, `empty:`, `type:`, `image:` and `<…>` grouping return 0 results, with no error.
 3. **The type, arrow, Enter habit doesn't work.** Down Arrow doesn't move from the search box into the results. Enter opens the first hit alphabetically, not the one you open most.
 4. **Fixed 2026-11-03 (PR #14): the list loads more rows as you scroll** (scroll bar covers loaded rows only; path/size/date sort makes each page ~3.5 s). Was: **The list stops at 500 rows.** The window asks the daemon for only 500 results. The status bar can say "1,452,260 objects", but scrolling ends at row 500.
 5. **Sorting by anything but Name is slow.** Path, Size and Date sort every match on every keystroke: 2.2 s, 0.5 s and 0.2 s for `a`. Everything keeps fast-sort indexes. Type and Extension can't be sorted at all.
@@ -47,7 +47,7 @@ Source: [Search Syntax](https://www.voidtools.com/support/everything/search_synt
 | Wildcards in a path term | `c:\*\downloads\*.pdf`; `**` crosses folders | **Missing**: any `*` makes the term a name-only glob, checked before `/` (Query.swift:117-121) | `ev --count '/downloads/*.pdf'` = 0; workaround `'/downloads/ *.pdf'` = 10 |
 | Search a folder by path | `\downloads`, `c:\windows\` (a backslash means full-path match) | **Have** (with `/`): a term containing `/` matches the full path (Query.swift:120-121) | `ev --count '/downloads/'` (1203) |
 | Drive filter | `d:`, `c:\|e:`, `!e:` | **Partial**: `drive:NAME` = path contains `/volumes/NAME/` (Query.swift:94-98); scope menu (EverythingApp.swift:234-242). Different syntax. | Plug in a drive, then `ev --count 'drive:CRASHBOX'`; or use the scope menu |
-| Built-in macros | `audio: doc: exe: image: video: zip:` | **Partial**: `audio: zip: doc: exe: pic: video:` (Scope.swift:120-130, Query.swift:87-89); Everything's `image:` is not recognized | `ev --count 'image:'` = 0 vs `ev --count 'pic:'` = 84,918 |
+| Built-in macros | `audio: doc: exe: image: video: zip:` | **Have**: `audio: zip: doc: exe: pic: video:` (Scope.swift), and `image:` = `pic:` (2026-11-03) | `ev --count 'image:'` = `ev --count 'pic:'` (100,623) |
 | Regex | `regex:^IMG_\d+`, quoted patterns with spaces | **Have**: Query.swift:103-106, Search.swift:107-121 (always case-insensitive) | `ev --count 'regex:^IMG_\d+'` (7038) |
 | Search as you type | Results update on each keystroke | **Have**: EverythingApp.swift:109 (`didSet { run() }`) | Type in the window and watch the count change |
 | Feedback on bad syntax | Invalid input is reported or matched literally | **Missing**: see "Two parse behaviors" above | `ev --count 'dm:lastweek'` |
@@ -59,11 +59,11 @@ Source: [Search Modifiers](https://www.voidtools.com/support/everything/search_m
 
 | Feature | Everything behavior | MacEverything status | How to test on the Mac |
 | --- | --- | --- | --- |
-| `case:` / Match Case (Ctrl+I) | Case-sensitive per term or globally | **Missing**: names are matched only in lowercase form (FileIndex.swift:143-144); regex is compiled `.caseInsensitive` (Search.swift:109) | `ev --count 'case:Report'` = 0 |
+| `case:` / Match Case (Ctrl+I) | Case-sensitive per term or globally | **Partial** (2026-11-03): `case:Report` per term, on name text and wildcards (Query.swift `textModifiers`, Search.swift `casedMatch`); no global toggle; `regex:` stays case-insensitive | `ev --count 'case:Report'` (2,378) + `case:report` (5,431) ≤ `report` (7,952) |
 | Diacritics (Ctrl+M; default ignores accents) | `resume` finds `résumé` unless Match Diacritics is on | **Missing**: lowercased and precomposed, not accent-folded (FileIndex.swift:143-144), so it always matches accents exactly | Create nothing; on a known accented file name, search without accents |
-| `ww:` / whole words (Ctrl+B) | Matches whole words only | **Missing**: literal text | `ev --count 'ww:report'` = 0 |
+| `ww:` / whole words (Ctrl+B) | Matches whole words only | **Partial** (2026-11-03): `ww:`/`wholeword:` per term; a word is ASCII letters, digits and any non-ASCII character (`_` `-` `.` split words); no global toggle, no wildcards | `ev --count 'ww:report'` (5,615) + `'!ww:report'` = total |
 | `path:` modifier / Match Path (Ctrl+U) | Match the term against the full path; global toggle | **Partial**: `path:text` = substring of the full path (Query.swift:99-102, PathTable); no global toggle, no `no-path:`, no wildcards in `path:` | `ev --count 'path:football'` (72,288); `ev --count 'path:*.pdf'` = 0 |
-| Prefix / suffix / `startwith:` / `endwith:` / `whole:` (`wfn:`) | Anchor the match to word or name start/end | **Missing**: literal text; `report*` (glob) is the only stand-in for "starts with" | `ev --count 'startwith:report'` = 0 |
+| Prefix / suffix / `startwith:` / `endwith:` / `whole:` (`wfn:`) | Anchor the match to word or name start/end | **Have** for `startwith:`, `endwith:`, `wfn:`/`wholefilename:` (2026-11-03); no `prefix:`/`suffix:` word anchors | `ev --count 'startwith:report'` = `'report*'` (1,761) |
 | Ignore punctuation / white-space (1.5) | `spiderman` finds `spider-man` | **Missing** | `ev --count 'nopunc:spiderman'` = 0 |
 | `file:` / `folder:` | Files or folders only | **Have**: Query.swift:84-85, Search.swift:387-392 | `ev --count file:` (2,083,335); `ev --count folder:` (503,160) |
 | `ext:` | `ext:pdf;docx` | **Have**: Query.swift:90-93 | `ev --count 'ext:pdf;docx'` (30,267) |
@@ -81,7 +81,7 @@ Source: [Search Modifiers](https://www.voidtools.com/support/everything/search_m
 | `child:`, `childcount:`, `empty:` | Folders by what they contain | **Missing**: the child map exists (FileIndex.swift:99) but there's no query term | `ev --count 'empty:'` = 0 |
 | `dupe:` (1.5) | Duplicate names, sizes, etc. | **Missing** | `ev --count 'dupe:'` = 0 |
 | `content:` | Search file text | **Missing** | `ev --count 'content:invoice'` |
-| `len:` | Name length | **Missing** | `ev --count 'len:>200'` = 0 |
+| `len:` | Name length | **Have** (2026-11-03): characters of the name, with comparisons | `ev --count 'len:>200'` (31); `'len:>1000'` = 0 |
 | `type:`, `name:`, `stem:`, `extension:`, `full-path:` | Property text matches | **Missing**: all literal text | `ev --count 'type:pdf'` = 0 |
 | `regex:` | PCRE on the name | **Have** (ICU, not PCRE): see section 1 | `ev --count 'regex:^IMG_\d+'` |
 

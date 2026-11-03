@@ -62,12 +62,16 @@ Grant Full Disk Access one more time after that install; later rebuilds keep it.
 | `ext:mp4;mov` | any listed extension |
 | `path:Football` | the word anywhere in the full path |
 | `drive:CRASHBOX` | only that drive (also the scope menu in the search window) |
-| `audio:` `zip:` `doc:` `exe:` `pic:` `video:` | file types (also the type menu in the search window) |
+| `audio:` `zip:` `doc:` `exe:` `pic:` (or `image:`) `video:` | file types (also the type menu in the search window) |
 | `!temp:` | hide temp and generated files: node_modules, .git, build and cache folders, *.tmp, system temp. The search window hides them unless "Show temp files" is ticked |
 | `size:>1gb`, `size:<10kb` | file size |
 | `dm:today`, `dm:thisweek`, `dm:>2026-10-01` | date modified |
 | `regex:^IMG_\d+` | regular expression on the name |
 | `file:`, `folder:` | only files or only folders |
+| `case:Report` | the word with this exact case |
+| `ww:report` | the word as a whole word (`report-2026.pdf`, not `reports.pdf`) |
+| `wfn:notes.txt`, `startwith:q1`, `endwith:.txt` | the whole name, its start, its end |
+| `len:>200` | names longer than 200 characters |
 
 ## Settings
 
