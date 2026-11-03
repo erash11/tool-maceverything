@@ -445,17 +445,19 @@ extension FileIndex {
 
     /// Roots that sit directly in an indexed folder, as (root, folder): /Volumes/X in /Volumes,
     /// which the walk of / records but doesn't enter. A root has no parent record, so parent: and
-    /// childcount: add these. Left out when the folder already lists a child of that name.
+    /// childcount: add these. Left out when the folder already lists a child of that exact name
+    /// (case kept, as `lookup` does; String == ignores only how accents are encoded), since that
+    /// child is the same entry.
     func rootsInFolders() -> [(root: Int32, folder: Int32)] {
         let slash = UInt8(ascii: "/")
         var out: [(root: Int32, folder: Int32)] = []
         for id in roots {
             let path = lowerName(id)
             guard let cut = path.lastIndex(of: slash), cut + 1 < path.endIndex else { continue } // "/" itself
-            let leaf = path[(cut + 1)...]
             let folderPath = cut == path.startIndex ? path[...cut] : path[..<cut]
+            guard let leaf = name(of: id).split(separator: "/").last.map(String.init) else { continue }
             for folder in folders(atLowerPath: Array(folderPath)) where folder != id {
-                if (children[folder] ?? []).contains(where: { lowerName($0).elementsEqual(leaf) }) { continue }
+                if (children[folder] ?? []).contains(where: { name(of: $0) == leaf }) { continue }
                 out.append((id, folder))
             }
         }
