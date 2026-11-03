@@ -105,7 +105,9 @@ public struct Query {
         }
         if lower.hasPrefix("regex:") {
             let pattern = String(token.dropFirst(6))
-            return pattern.isEmpty ? .invalid(raw) : .regex(pattern, negated: negated)
+            // A pattern that won't compile matches nothing; as .regex, "!regex:([" would match all.
+            guard !pattern.isEmpty, (try? NSRegularExpression(pattern: pattern)) != nil else { return .invalid(raw) }
+            return .regex(pattern, negated: negated)
         }
         if lower.hasPrefix("size:") {
             let (cmp, rest) = comparison(String(lower.dropFirst(5)))
@@ -160,9 +162,14 @@ public struct Query {
             return (secs(calendar.date(byAdding: .day, value: -6, to: today)!),
                     secs(calendar.date(byAdding: .day, value: 1, to: today)!))
         default:
-            let parts = s.split(separator: "-").compactMap { Int($0) }
-            guard parts.count == 3,
-                  let day = calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+            // Every part must be a number, and the date must exist as written (no 2026-02-30).
+            let fields = s.split(separator: "-", omittingEmptySubsequences: false)
+            let parts = fields.compactMap { Int($0) }
+            guard fields.count == 3, parts.count == 3,
+                  let day = calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2])),
+                  calendar.component(.year, from: day) == parts[0],
+                  calendar.component(.month, from: day) == parts[1],
+                  calendar.component(.day, from: day) == parts[2]
             else { return nil }
             return (secs(day), secs(calendar.date(byAdding: .day, value: 1, to: day)!))
         }
