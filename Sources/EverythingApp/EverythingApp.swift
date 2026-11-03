@@ -66,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             styleMask: [.titled, .closable, .resizable, .miniaturizable],
                             backing: .buffered, defer: false)
             p.title = "MacEverything"
+            p.identifier = SearchView.panelID
             p.isFloatingPanel = true
             p.level = .floating
             p.hidesOnDeactivate = false
@@ -190,6 +191,10 @@ final class SearchModel: ObservableObject {
         }
     }
 
+    /// Whether `hits` are the first page of the search the box, scope and filter now ask for (not
+    /// rows of an earlier one still waiting to be replaced).
+    var hitsAreCurrent: Bool { pagesGeneration == generation }
+
     func run() {
         generation += 1
         let gen = generation
@@ -297,6 +302,9 @@ struct SearchView: View {
     @FocusState private var tableFocused: Bool
     /// The Down Arrow watcher (see watchDownArrow); removed when the view goes away.
     @State private var keyMonitor: Any?
+    /// Down was pressed while the results were still those of an earlier search.
+    @State private var downPending = false
+    static let panelID = NSUserInterfaceItemIdentifier("MacEverything.search")
     /// Which columns are shown, their order and widths (right-click a header; drag to reorder).
     /// Defaults to Name | Type | Path, like Everything.
     @AppStorage("resultColumns.v2") private var columnsData = Data()
@@ -356,6 +364,11 @@ struct SearchView: View {
             if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
             keyMonitor = nil
         }
+        // $hits sends the new rows just before `hits` changes; by then the search is marked current.
+        .onReceive(model.$hits) { hits in
+            if downPending && model.hitsAreCurrent { moveIntoResults(hits) }
+        }
+        .onChange(of: model.query) { _ in downPending = false }
         .onExitCommand { NSApp.keyWindow?.orderOut(nil) }
         .onCopyCommand {
             let paths = selection.isEmpty ? [] : Array(selection)
@@ -495,19 +508,32 @@ struct SearchView: View {
     /// selected (a selection still on screen is kept) and the list takes the keys, so the next
     /// Down, Up and Return work there. A local key monitor runs before the text field sees the key
     /// (SwiftUI's onKeyPress needs macOS 14). Other keys, and Down with a modifier, pass through.
+    /// While the rows are still an earlier search's, the move waits for the current ones (a new
+    /// keystroke in the box cancels it), so Return can't open a row that doesn't match.
     private func watchDownArrow() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-            // The search panel's only text field is the search box, so its field editor holding
-            // the keys means the box has focus (read from AppKit: this runs outside the view's body).
-            guard event.keyCode == UInt16(kVK_DownArrow), modifiers.isEmpty, event.window is NSPanel,
-                  event.window?.firstResponder is NSTextView,
-                  let first = model.hits.first else { return event }
-            if !model.hits.contains(where: { selection.contains($0.path) }) { selection = [first.path] }
-            tableFocused = true
+            // The search panel's only text field is the search box, so a text field's editor holding
+            // the panel's keys means the box has focus (read from AppKit: this runs outside the
+            // view's body). The identifier keeps other panels (the folder chooser) out.
+            guard event.keyCode == UInt16(kVK_DownArrow), modifiers.isEmpty,
+                  event.window?.identifier == SearchView.panelID,
+                  (event.window?.firstResponder as? NSTextView)?.delegate is NSTextField else { return event }
+            if model.hitsAreCurrent {
+                moveIntoResults(model.hits)
+            } else {
+                downPending = true
+            }
             return nil
         }
+    }
+
+    private func moveIntoResults(_ hits: [SearchHit]) {
+        downPending = false
+        guard let first = hits.first else { return }
+        if !hits.contains(where: { selection.contains($0.path) }) { selection = [first.path] }
+        tableFocused = true
     }
 
     private func openSelection(reveal: Bool) {
