@@ -2,6 +2,13 @@
 
 ## Current state
 **2026-11-03 (read first):**
+- MERGED #19: `type:` matches the kind as macOS names it (UTType description of the extension;
+  `.app` and other packages their own kind; folders `folder`; no known extension `document`).
+  Per-record kind cache like `tempMask()` (4 B/record; 7,147 extensions, 241 kinds; built once,
+  0.45 to 0.75 s on the first `type:` search after a start or compaction, then 10 to 35 ms).
+  Installed from `main` 8780b4f (backups `*.pre-type-2026-11-03`). Live through the daemon:
+  `type:pdf` 38,373, `type:application` 1,874, `type:image` 101,845. Codex: 3 rounds, approved.
+  Gap 2 left: `dc:` (needs creation dates in the index), `child:`, `name:`/`stem:`/`extension:`.
 - MERGED #18 (gap 2, part C): `parent:`/`infolder:` (direct children; case ignored; walks from
   every root the path starts with), `depth:`/`parents:` (path parts: `/` 0, `/Volumes/X` 2),
   `childcount:`, `empty:` (folders only). A root such as /Volumes/CRASHBOX counts as a child of
@@ -121,9 +128,8 @@ still fails to build (same SwiftUIMacros error; Command Line Tools now Swift 6.4
 The old Next #5 (delete codex branches, close #10) was already done.
 
 ## Next
-0. Next PARITY gaps: `type:` (per-extension type-name cache; brief Codex with the existing
-   bounds and that case-sensitive-volume edge cases past them are out of scope, or it runs 7+
-   rounds again, as #17 and #18 did);
+0. Next PARITY gaps (brief Codex with the existing bounds and that case-sensitive-volume edge
+   cases past them are out of scope, or it runs 7+ rounds again, as #17 and #18 did):
    (b2) cache sorted ids per query in the daemon so
    path/size/date pages are fast; (c) Down Arrow from the search box into the list. Then the smaller items in the
    2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
