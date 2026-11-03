@@ -10,7 +10,7 @@ Everything features come from voidtools' own docs (1.4, plus 1.5 alpha where mar
 The 10 gaps most likely to make it feel broken for someone coming from Everything, worst first:
 
 1. **Fixed 2026-11-03: unreadable values match nothing (PR #13), and the common values now work (PR #15): `dm:lastweek`, `dm:2026`, `dm:a..b`, `size:huge`, `size:10mb..50mb`.** Was: **Search terms the parser can't read return everything.** Unparsed values are dropped, so `dm:lastweek`, `dm:7days`, `dm:2026`, `size:10mb..50mb` and `size:huge` each return all 2.59M entries, with no error.
-2. **Mostly fixed 2026-11-03: `case:`, `ww:`, `wfn:`, `startwith:`, `endwith:`, `len:`, `image:` work (PR #16); `< >` grouping (PR #17); `parent:`, `depth:`, `empty:`, `childcount:` (PR #18); still missing: `type:`, `dc:`, `child:`.** Was: **Functions and modifiers it doesn't know become literal text, so they return 0.** `case:`, `parent:`, `ww:`, `dc:`, `empty:`, `type:`, `image:` and `<…>` grouping return 0 results, with no error.
+2. **Mostly fixed 2026-11-03: `case:`, `ww:`, `wfn:`, `startwith:`, `endwith:`, `len:`, `image:` work (PR #16); `< >` grouping (PR #17); `parent:`, `depth:`, `empty:`, `childcount:` (PR #18); `type:` (PR #19); still missing: `dc:`, `child:`.** Was: **Functions and modifiers it doesn't know become literal text, so they return 0.** `case:`, `parent:`, `ww:`, `dc:`, `empty:`, `type:`, `image:` and `<…>` grouping return 0 results, with no error.
 3. **The type, arrow, Enter habit doesn't work.** Down Arrow doesn't move from the search box into the results. Enter opens the first hit alphabetically, not the one you open most.
 4. **Fixed 2026-11-03 (PR #14): the list loads more rows as you scroll** (scroll bar covers loaded rows only; path/size/date sort makes each page ~3.5 s). Was: **The list stops at 500 rows.** The window asks the daemon for only 500 results. The status bar can say "1,452,260 objects", but scrolling ends at row 500.
 5. **Sorting by anything but Name is slow.** Path, Size and Date sort every match on every keystroke: 2.2 s, 0.5 s and 0.2 s for `a`. Everything keeps fast-sort indexes. Type and Extension can't be sorted at all.
@@ -82,7 +82,8 @@ Source: [Search Modifiers](https://www.voidtools.com/support/everything/search_m
 | `dupe:` (1.5) | Duplicate names, sizes, etc. | **Missing** | `ev --count 'dupe:'` = 0 |
 | `content:` | Search file text | **Missing** | `ev --count 'content:invoice'` |
 | `len:` | Name length | **Have** (2026-11-03): characters of the name, with comparisons | `ev --count 'len:>200'` (31); `'len:>1000'` = 0 |
-| `type:`, `name:`, `stem:`, `extension:`, `full-path:` | Property text matches | **Missing**: all literal text | `ev --count 'type:pdf'` = 0 |
+| `type:` | The type name ("PDF Document") | **Have** (2026-11-03, PR #19): the kind as macOS names it (UTType description of the extension; packages such as .app their own kind; folders `folder`; no known extension `document`), contains or wildcard | `ev --count 'type:pdf'` (38,373) vs `'ext:pdf'` (38,225) |
+| `name:`, `stem:`, `extension:`, `full-path:` | Property text matches | **Missing**: all literal text | `ev --count 'stem:report'` = 0 |
 | `regex:` | PCRE on the name | **Have** (ICU, not PCRE): see section 1 | `ev --count 'regex:^IMG_\d+'` |
 
 ## 3. Results window

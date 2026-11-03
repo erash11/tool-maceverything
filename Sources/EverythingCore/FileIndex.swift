@@ -51,6 +51,9 @@ public final class FileIndex {
     /// See `tempMask()`. Searches run concurrently under the shared lock, so the cache has its own.
     let tempMaskLock = NSLock()
     var tempMaskCache: (records: Int, deleted: Int, mask: [UInt8])?
+    /// See `kindTable()`, cached the same way with its own lock.
+    let kindLock = NSLock()
+    var kindCache: KindTable?
 
     /// Saved FSEvents state per root path.
     public var volumeState: [String: VolumeState] = [:]
@@ -292,6 +295,9 @@ public final class FileIndex {
         tempMaskLock.lock()
         tempMaskCache = nil
         tempMaskLock.unlock()
+        kindLock.lock()
+        kindCache = nil
+        kindLock.unlock()
         records = other.records
         names = other.names
         lowerNames = other.lowerNames

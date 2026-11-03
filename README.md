@@ -76,6 +76,7 @@ Grant Full Disk Access one more time after that install; later rebuilds keep it.
 | `parent:/Users/eric` (or `infolder:`) | items directly in that folder, not in its subfolders (case ignored; quote a path with spaces: `"parent:/Volumes/X/My Docs"`) |
 | `depth:2` (or `parents:`), `depth:>5` | items with that many folders above them: `/` is 0, `/Users` is 1, `/Volumes/X/a` is 3 |
 | `childcount:>100`, `empty:` | folders holding that many files and folders; `empty:` = folders holding none |
+| `type:pdf`, `type:image`, `type:application` | the kind, as macOS names it ("PDF document", "JPEG image"); folders are `folder`, a file with no known extension `document` |
 
 ## Settings
 
