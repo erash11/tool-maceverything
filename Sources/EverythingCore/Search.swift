@@ -445,18 +445,20 @@ extension FileIndex {
 
     /// Roots that sit directly in an indexed folder, as (root, folder): /Volumes/X in /Volumes,
     /// which the walk of / records but doesn't enter. A root has no parent record, so parent: and
-    /// childcount: add these. Left out when the folder already lists a child of that exact name
-    /// (case kept, as `lookup` does; String == ignores only how accents are encoded), since that
-    /// child is the same entry.
+    /// childcount: add these. Names are compared with case kept, as `lookup` does (String == ignores
+    /// only how accents are encoded): the folder is the one whose path is exactly the root's folder
+    /// path, and the root is left out when that folder already lists a child of the same name, since
+    /// that child is the same entry.
     func rootsInFolders() -> [(root: Int32, folder: Int32)] {
-        let slash = UInt8(ascii: "/")
         var out: [(root: Int32, folder: Int32)] = []
         for id in roots {
-            let path = lowerName(id)
-            guard let cut = path.lastIndex(of: slash), cut + 1 < path.endIndex else { continue } // "/" itself
-            let folderPath = cut == path.startIndex ? path[...cut] : path[..<cut]
-            guard let leaf = name(of: id).split(separator: "/").last.map(String.init) else { continue }
-            for folder in folders(atLowerPath: Array(folderPath)) where folder != id {
+            let parts = name(of: id).split(separator: "/")
+            guard let last = parts.last else { continue } // "/" itself
+            let leaf = String(last)
+            let folderPath = "/" + parts.dropLast().joined(separator: "/")
+            // The case-insensitive walk finds the candidates; the exact path picks the folder.
+            let candidates = folders(atLowerPath: Array(FileIndex.searchForm(folderPath).utf8))
+            for folder in candidates where folder != id && path(of: folder) == folderPath {
                 if (children[folder] ?? []).contains(where: { name(of: $0) == leaf }) { continue }
                 out.append((id, folder))
             }

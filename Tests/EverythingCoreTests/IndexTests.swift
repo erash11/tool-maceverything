@@ -314,19 +314,21 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(names(twice, "parent:/elsewhere"), [])
         XCTAssertEqual(names(twice, "empty:"), ["/elsewhere/Y", "/Volumes/X", "X"])
 
-        // On a case-sensitive volume, a folder x is not the root X: both count. An accent encoded
-        // another way is the same name.
+        // On a case-sensitive volume, a folder x is not the root X: both count, and the root is in
+        // Volumes, not in volumes. An accent encoded another way is the same name.
         let cased = FileIndex()
         let top2 = cased.addRoot("/")
         let vols = cased.add(ScannedEntry(name: "Volumes", isDirectory: true, size: 0, modified: 0), parent: top2)
         cased.add(ScannedEntry(name: "x", isDirectory: true, size: 0, modified: 0), parent: vols)
         cased.add(ScannedEntry(name: "Cafe\u{301}", isDirectory: true, size: 0, modified: 0), parent: vols)
+        cased.add(ScannedEntry(name: "volumes", isDirectory: true, size: 0, modified: 0), parent: top2)
         cased.addRoot("/Volumes/X")
         cased.addRoot("/Volumes/Caf\u{E9}")
         cased.sortIfNeeded(force: true)
         XCTAssertEqual(cased.search(Query.parse("parent:/volumes")).total, 3) // Café, x and the root X
         XCTAssertEqual(cased.search(Query.parse("parent:/volumes case:X")).total, 1) // the root X only
         XCTAssertEqual(names(cased, "childcount:3"), ["Volumes"])
+        XCTAssertEqual(names(cased, "empty: depth:1"), ["volumes"]) // the root X is in Volumes only
 
         // After these filters, ">" compares inside a group, as after size:.
         XCTAssertEqual(Query.parse("<depth:>2>").groups, Query.parse("depth:>2").groups)
