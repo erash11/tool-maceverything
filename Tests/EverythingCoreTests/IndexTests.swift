@@ -381,8 +381,9 @@ final class IndexTests: XCTestCase {
     }
 
     func testTypeMatchesKinds() {
-        // Kind texts come from the system and are localized, so only "pdf", "folder" and this code's
-        // own "document" are written out; the rest is checked against each record's kind.
+        // Kind texts come from the system and are localized, so only this code's own "document" is
+        // written out: the folder and PDF kinds are asked for, and the rest is checked against each
+        // record's kind.
         let index = makeIndex()
         let root = index.lookup("/data")!
         let tool = index.add(ScannedEntry(name: "Tool.app", isDirectory: true, size: 0, modified: 0), parent: root)
@@ -391,10 +392,14 @@ final class IndexTests: XCTestCase {
             index.add(ScannedEntry(name: name, isDirectory: false, size: 1, modified: 0), parent: root)
         }
         index.sortIfNeeded(force: true)
-        XCTAssertEqual(names(index, "type:pdf"), ["q1 report.pdf", "R\u{E9}sum\u{E9}.PDF"])
-        XCTAssertEqual(names(index, "TYPE:PDF !ext:pdf"), [])
-        XCTAssertEqual(names(index, "type:folder"), ["/data", "film", "Reports"]) // an .app is a package
-        XCTAssertEqual(names(index, "type:folder | type:pdf"), ["/data", "film", "q1 report.pdf", "Reports", "R\u{E9}sum\u{E9}.PDF"])
+        let folderKind = String(decoding: FileKinds.kindText(extension: "", isDirectory: true), as: UTF8.self)
+        let pdfKind = String(decoding: FileKinds.kindText(extension: "pdf", isDirectory: false), as: UTF8.self)
+        XCTAssertNotEqual(pdfKind, "document")
+        XCTAssertEqual(names(index, "\"type:\(pdfKind)\""), ["q1 report.pdf", "R\u{E9}sum\u{E9}.PDF"])
+        XCTAssertEqual(names(index, "\"TYPE:\(pdfKind.uppercased())\" !ext:pdf"), [])
+        XCTAssertEqual(names(index, "\"type:\(folderKind)\""), ["/data", "film", "Reports"]) // an .app is a package
+        XCTAssertEqual(names(index, "\"type:\(folderKind)\" | \"type:\(pdfKind)\""),
+                       ["/data", "film", "q1 report.pdf", "Reports", "R\u{E9}sum\u{E9}.PDF"])
         for name in ["x.zzqq", ".bashrc", "trailing.", "noext", "a.8f3a9b2c4d5e6f7a8b9c"] {
             XCTAssertTrue(names(index, "type:document").contains(name), name) // no declared type
         }
@@ -423,7 +428,7 @@ final class IndexTests: XCTestCase {
 
         // The cached kinds grow with the index.
         index.add(ScannedEntry(name: "late.pdf", isDirectory: false, size: 1, modified: 0), parent: root)
-        XCTAssertEqual(names(index, "type:pdf"), ["late.pdf", "q1 report.pdf", "R\u{E9}sum\u{E9}.PDF"])
+        XCTAssertEqual(names(index, "\"type:\(pdfKind)\""), ["late.pdf", "q1 report.pdf", "R\u{E9}sum\u{E9}.PDF"])
     }
 
     func testGroups() {
