@@ -278,19 +278,11 @@ extension FileIndex {
         case .name:
             page = Array(nameOrdered(matched, first: end, descending: options.descending)[offset..<end])
         case .path:
-            let paths = matched.map { path(of: $0).lowercased() }
-            var idx = Array(0..<matched.count)
-            idx.sort { options.descending ? paths[$0] > paths[$1] : paths[$0] < paths[$1] }
-            page = idx[offset..<end].map { matched[$0] }
-        case .size, .modified:
-            let bySize = options.sort == .size
-            var sorted = matched
-            sorted.sort {
-                let ra = records[Int($0)], rb = records[Int($1)]
-                let a = bySize ? ra.size : ra.modified, b = bySize ? rb.size : rb.modified
-                return options.descending ? a > b : a < b
-            }
-            page = Array(sorted[offset..<end])
+            page = Array(pathOrdered(matched, first: end, descending: options.descending)[offset..<end])
+        case .size:
+            page = Array(keyOrdered(matched, first: end, descending: options.descending) { $0.size }[offset..<end])
+        case .modified:
+            page = Array(keyOrdered(matched, first: end, descending: options.descending) { $0.modified }[offset..<end])
         }
 
         let hits = page.map { id -> SearchHit in
@@ -313,6 +305,41 @@ extension FileIndex {
     func nameOrdered(_ ids: [Int32], first: Int, descending: Bool) -> [Int32] {
         if first == 0 { return [] }
         var unranked: [Int32] = []
+        let ranked = rankOrdered(ids, first: first, descending: descending, rank: rank, order: order,
+                                 unranked: &unranked)
+        if unranked.isEmpty { return ranked }
+        unranked.sort(by: lowerBytesLess)
+        if descending { unranked.reverse() }
+        var out: [Int32] = []
+        out.reserveCapacity(min(first, ranked.count + unranked.count))
+        var i = 0, j = 0
+        while out.count < first && (i < ranked.count || j < unranked.count) {
+            let takeUnranked: Bool
+            if i >= ranked.count {
+                takeUnranked = true
+            } else if j >= unranked.count {
+                takeUnranked = false
+            } else {
+                takeUnranked = descending ? lowerBytesLess(ranked[i], unranked[j])
+                                          : lowerBytesLess(unranked[j], ranked[i])
+            }
+            if takeUnranked { out.append(unranked[j]); j += 1 } else { out.append(ranked[i]); i += 1 }
+        }
+        return out
+    }
+
+    /// The first `first` of `ids` in path order (see pathOrder()), by the same bitmap walk.
+    func pathOrdered(_ ids: [Int32], first: Int, descending: Bool) -> [Int32] {
+        if first == 0 { return [] }
+        let (order, rank) = pathOrder()
+        var unranked: [Int32] = [] // stays empty: pathOrder() ranks every live record
+        return rankOrdered(ids, first: first, descending: descending, rank: rank, order: order, unranked: &unranked)
+    }
+
+    /// The first `first` of the ids that have a rank in `order`, walked as a bitmap over the ranks;
+    /// ids with rank -1 go to `unranked`.
+    func rankOrdered(_ ids: [Int32], first: Int, descending: Bool, rank: [Int32], order: [Int32],
+                     unranked: inout [Int32]) -> [Int32] {
         var bits = [UInt64](repeating: 0, count: (order.count + 63) / 64)
         for id in ids {
             let rk = rank[Int(id)]
@@ -347,25 +374,44 @@ extension FileIndex {
                 w += 1
             }
         }
-        if unranked.isEmpty { return ranked }
-        unranked.sort(by: lowerBytesLess)
-        if descending { unranked.reverse() }
-        var out: [Int32] = []
-        out.reserveCapacity(min(first, ranked.count + unranked.count))
-        var i = 0, j = 0
-        while out.count < first && (i < ranked.count || j < unranked.count) {
-            let takeUnranked: Bool
-            if i >= ranked.count {
-                takeUnranked = true
-            } else if j >= unranked.count {
-                takeUnranked = false
-            } else {
-                takeUnranked = descending ? lowerBytesLess(ranked[i], unranked[j])
-                                          : lowerBytesLess(unranked[j], ranked[i])
-            }
-            if takeUnranked { out.append(unranked[j]); j += 1 } else { out.append(ranked[i]); i += 1 }
+        return ranked
+    }
+
+    /// The first `first` of `ids` by `key` (size or date), ties by id, so the order is total and
+    /// pages split the same way every time; descending is the exact reverse. Only the first `first`
+    /// are kept, in a heap (n log first), unless most of them are wanted anyway.
+    func keyOrdered(_ ids: [Int32], first: Int, descending: Bool, key: (Record) -> Int64) -> [Int32] {
+        if first == 0 { return [] }
+        var items = ids.map { (key: key(records[Int($0)]), id: $0) }
+        func before(_ a: (key: Int64, id: Int32), _ b: (key: Int64, id: Int32)) -> Bool {
+            if a.key != b.key { return descending ? a.key > b.key : a.key < b.key }
+            return descending ? a.id > b.id : a.id < b.id
         }
-        return out
+        if first * 4 >= items.count {
+            items.sort(by: before)
+            return items.prefix(first).map(\.id)
+        }
+        // A heap of the first `first` seen so far, the last of them on top.
+        var heap = Array(items.prefix(first))
+        func siftDown(_ start: Int) {
+            var i = start
+            while true {
+                let l = 2 * i + 1, r = l + 1
+                var later = i
+                if l < heap.count && before(heap[later], heap[l]) { later = l }
+                if r < heap.count && before(heap[later], heap[r]) { later = r }
+                if later == i { return }
+                heap.swapAt(i, later)
+                i = later
+            }
+        }
+        for i in stride(from: heap.count / 2 - 1, through: 0, by: -1) { siftDown(i) }
+        for item in items.dropFirst(first) where before(item, heap[0]) {
+            heap[0] = item
+            siftDown(0)
+        }
+        heap.sort(by: before)
+        return heap.map(\.id)
     }
 
     /// Scans records in memory order (sequential reads), split into chunks across cores.
