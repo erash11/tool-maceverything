@@ -99,7 +99,7 @@ Source: [Results](https://www.voidtools.com/support/everything/results/), [Keybo
 | Show/hide, reorder, remember columns | Right-click header, drag | **Have**: EverythingApp.swift:222, :280-288 (macOS 14+) | Drag a header, close and reopen |
 | Click header to sort (Name, Path, Size, Date Modified) | Sort, click again to reverse | **Have**: EverythingApp.swift:376-393, Search.swift:157-174 (sorted by the daemon across all matches) | Click Size twice |
 | Sort by Type / Extension | Yes (Ctrl+4, Ctrl+5) | **Have** (2026-11-03, PR #22): click the Type or Extension header; the daemon sorts every match (kind text as `type:` reads it, or the extension; then name). Columns show the same text the daemon sorts by. Ctrl+4/5 shortcuts missing | Click the Type header; `ev --sort type`, `--sort extension` |
-| Sort shortcuts Ctrl+1…9 | Sort by name, path, size… | **Missing** | Press Cmd/Ctrl+1 |
+| Sort shortcuts Ctrl+1…9 | Sort by name, path, size… | **Have** for Ctrl+1…6 (2026-11-03, PR #23): name, path, size, extension, type, date modified; the same keys again reverse. No created/accessed dates or attributes to sort by (Ctrl+7…9) | In the search panel press Ctrl+3, then Ctrl+3 again |
 | Folder sizes in the Size column | Shown when folder size indexing is on | **Missing**: folders have size 0 and show "" (Scanner.swift:94, :179; EverythingApp.swift:351) | Show Size, search `folder:` |
 | File icons / thumbnails | Shell icons; thumbnail views | **Partial**: generic SF Symbols `folder`/`doc` (EverythingApp.swift:340); no thumbnails | Look at a .pdf row |
 | Highlight matched text | Bold match in the name (1.5) | **Missing**: plain `Label` (EverythingApp.swift:339-341) | Search `report` |

@@ -299,7 +299,7 @@ struct SearchView: View {
     @State private var selection = Set<String>()
     @State private var sortOrder = [KeyPathComparator(\SearchHit.name)]
     @FocusState private var fieldFocused: Bool
-    /// The Down Arrow watcher (see watchDownArrow); removed when the view goes away.
+    /// The key watcher (see watchKeys); removed when the view goes away.
     @State private var keyMonitor: Any?
     /// Down was pressed while the results were still those of an earlier search.
     @State private var downPending = false
@@ -356,7 +356,7 @@ struct SearchView: View {
         .frame(minWidth: 600, minHeight: 320)
         .onAppear {
             fieldFocused = true
-            watchDownArrow()
+            watchKeys()
         }
         .onDisappear {
             if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
@@ -504,16 +504,23 @@ struct SearchView: View {
             }
     }
 
-    /// Down Arrow in the search box moves into the results, as in Everything: the first row is
+    /// Keys for the search panel. Down Arrow in the search box moves into the results, as in Everything: the first row is
     /// selected (a selection still on screen is kept) and the list takes the keys, so the next
     /// Down, Up and Return work there. A local key monitor runs before the text field sees the key
     /// (SwiftUI's onKeyPress needs macOS 14). Other keys, and Down with a modifier, pass through.
     /// While the rows are still an earlier search's, the move waits for the current ones (a new
     /// keystroke in the box cancels it), so Return can't open a row that doesn't match.
-    private func watchDownArrow() {
+    private func watchKeys() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            // Ctrl+1 to Ctrl+6 anywhere in the search panel: see sortShortcuts.
+            if modifiers == .control, event.window?.identifier == SearchView.panelID,
+               let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }),
+               let comparator = Self.sortShortcuts[digit] {
+                sortBy(comparator)
+                return nil
+            }
             // The search panel's only text field is the search box, so a text field's editor holding
             // the panel's keys means the box has focus (read from AppKit: this runs outside the
             // view's body). The identifier keeps other panels (the folder chooser) out.
@@ -532,6 +539,24 @@ struct SearchView: View {
     /// panel's only text field) holds its keys.
     private static func searchBoxHasKeys(_ window: NSWindow?) -> Bool {
         window?.identifier == panelID && (window?.firstResponder as? NSTextView)?.delegate is NSTextField
+    }
+
+    /// Everything's sort keys: Ctrl+1 name, 2 path, 3 size, 4 extension, 5 type, 6 date modified.
+    private static let sortShortcuts: [Int: KeyPathComparator<SearchHit>] = [
+        1: KeyPathComparator(\SearchHit.name), 2: KeyPathComparator(\SearchHit.path),
+        3: KeyPathComparator(\SearchHit.size), 4: KeyPathComparator(\SearchHit.extensionName),
+        5: KeyPathComparator(\SearchHit.kindName), 6: KeyPathComparator(\SearchHit.modified),
+    ]
+
+    /// Sorts as a header click does (the table's sort order drives the daemon's, see withBehavior):
+    /// a new key sorts ascending, the current key again flips the order.
+    private func sortBy(_ comparator: KeyPathComparator<SearchHit>) {
+        if var current = sortOrder.first, current.keyPath == comparator.keyPath {
+            current.order = current.order == .forward ? .reverse : .forward
+            sortOrder = [current]
+        } else {
+            sortOrder = [comparator]
+        }
     }
 
     private func moveIntoResults(_ hits: [SearchHit]) {
