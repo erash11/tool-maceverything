@@ -103,6 +103,9 @@ public final class IndexService {
     /// this one, so the walk finishes even when drops keep coming.
     private var walkTargets: [String] = []
     private var nextPass: [String: Bool] = [:]
+    /// `walkEventIds` as it was when the current next pass started: once that pass is done,
+    /// those changes are applied, even if drops keep queueing more passes.
+    private var passStartIds: [String: UInt64]?
     private var retryScheduled = false
     /// Folders that changed in the last minute. When FSEvents drops events these are listed
     /// first: a bulk change big enough to overflow the queue (a 5000-file delete) most likely
@@ -446,6 +449,9 @@ public final class IndexService {
         for path in batch.keys.sorted(by: { $0.count > $1.count }) { enqueue(path, recursive: batch[path] ?? false) }
         repeat {
             if walk.isEmpty && !nextPass.isEmpty {
+                // A pass is done. If it was a next pass, what was taken in before it is applied.
+                if let covered = passStartIds { settle(covered) }
+                passStartIds = walkEventIds
                 let again = nextPass
                 nextPass = [:]
                 walkTargets = []
@@ -553,11 +559,25 @@ public final class IndexService {
         if let started = walkStarted, Date().timeIntervalSince(started) > 2 {
             log("applied queued changes in " + String(format: "%.1f s", Date().timeIntervalSince(started)))
         }
-        let failures = Array(walkFailures.values)
+        settle(walkEventIds)
+        resetWalk()
+        // Its own flag, so a retry waiting 5 s never delays a fresh change's 0.2 s flush.
+        if !pendingPaths.isEmpty && !retryScheduled && !stepsByHand {
+            retryScheduled = true
+            work.asyncAfter(deadline: .now() + 5) {
+                self.retryScheduled = false
+                self.flush()
+            }
+        }
+    }
+
+    /// Accounts for the folders that failed so far and applies the event ids in `ids`, except
+    /// for roots with a failure: those ids wait in `pendingEventIds` for the retry.
+    private func settle(_ ids: [String: UInt64]) {
         var failedRoots = Set<String>()
         // Retry only the folders that failed, not the whole request: a volume-wide refresh
         // with one unreadable folder in it would otherwise re-list millions of entries.
-        for f in failures {
+        for f in walkFailures.values {
             let attempts = (retries[f.path] ?? 0) + 1
             if attempts > IndexService.maxRetries {
                 // Persistently unreadable: stop holding the cursor back, or one folder
@@ -571,22 +591,16 @@ public final class IndexService {
             pendingPaths[f.path] = (pendingPaths[f.path] ?? false) || f.recursive
             failedRoots.insert(rootFor(f.path))
         }
-        for (root, id) in walkEventIds {
-            if failedRoots.contains(root) {
-                // Keep the cursor behind the unapplied change; retry later.
-                pendingEventIds[root] = max(pendingEventIds[root] ?? 0, id)
-            } else if id > (appliedEventIds[root] ?? 0) {
-                appliedEventIds[root] = id
-            }
+        walkFailures = [:]
+        for root in failedRoots {
+            // Keep the cursor behind the unapplied change, and everything taken in after it.
+            let held = max(ids[root] ?? 0, walkEventIds[root] ?? 0)
+            if held > 0 { pendingEventIds[root] = max(pendingEventIds[root] ?? 0, held) }
+            walkEventIds[root] = nil
+            passStartIds?[root] = nil
         }
-        resetWalk()
-        // Its own flag, so a retry waiting 5 s never delays a fresh change's 0.2 s flush.
-        if !pendingPaths.isEmpty && !retryScheduled && !stepsByHand {
-            retryScheduled = true
-            work.asyncAfter(deadline: .now() + 5) {
-                self.retryScheduled = false
-                self.flush()
-            }
+        for (root, id) in ids where !failedRoots.contains(root) && id > (appliedEventIds[root] ?? 0) {
+            appliedEventIds[root] = id
         }
     }
 
@@ -597,6 +611,7 @@ public final class IndexService {
         walkStarted = nil
         walkTargets = []
         nextPass = [:]
+        passStartIds = nil
     }
 
     private func maintenance() {

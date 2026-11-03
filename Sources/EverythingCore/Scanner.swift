@@ -347,7 +347,8 @@ public struct Scanner {
             if failures.count == failedBefore {
                 // A listing of the folder alone does not cover a failed walk below it.
                 if !failures.isEmpty { failures.removeAll { $0.path == p && (deep || !$0.recursive) } }
-                handled(p, deep)
+                // Still owed a walk below it: not handled, so the caller keeps its retry count.
+                if failures.isEmpty || !failures.contains(where: { $0.path == p }) { handled(p, deep) }
             }
             queue.append(contentsOf: next)
             if !queue.isEmpty && yield() { break }

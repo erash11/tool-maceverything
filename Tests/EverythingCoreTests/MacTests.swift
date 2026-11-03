@@ -133,6 +133,7 @@ final class MacTests: XCTestCase {
         fm.createFile(atPath: dir + "/a/b", contents: nil, attributes: [.posixPermissions: 0o755])
         var queue: [Scanner.PendingFolder] = [(dir + "/a/b", b, false), (dir + "/a/b", b, true)]
         var restored = false
+        var handled: [String] = []
         let failures = Scanner().refreshFailures(SharedIndex(index), queue: &queue, yield: {
             if !restored { // after the failed walk, before the shallow listing
                 try? fm.removeItem(atPath: self.dir + "/a/b")
@@ -140,8 +141,9 @@ final class MacTests: XCTestCase {
                 restored = true
             }
             return false
-        })
+        }, handled: { path, _ in handled.append(path) })
         XCTAssertTrue(restored)
+        XCTAssertFalse(handled.contains(dir + "/a/b"), "still owed a walk, so its retry count must stay")
         XCTAssertEqual(failures.map(\.path), [dir + "/a/b"])
         XCTAssertEqual(failures.first?.recursive, true)
     }
@@ -294,6 +296,36 @@ final class MacTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(service.appliedEventId(for: dir) ?? 0, before + 30)
         XCTAssertEqual(count("two.pdf"), 1)
         XCTAssertEqual(count("\"path:/deep/d\""), 20)
+    }
+
+    /// Bulk changes can make FSEvents drop events again during every pass of the walk. Each
+    /// finished pass must still apply what was taken in before it started.
+    func testCursorAdvancesPassByPassWhileDropsKeepComing() throws {
+        let service = IndexService(roots: [dir], indexURL: URL(fileURLWithPath: dir + "-passes.bin"))
+        service.sliceSeconds = 0
+        service.stepsByHand = true
+        service.start()
+        defer { service.stop() }
+        let before = service.appliedEventId(for: dir) ?? 0
+        func drop(_ id: UInt64) {
+            service.receive([Watcher.Event(path: "/", mustScanSubDirs: true, rootChanged: false,
+                                           historyDone: false, dropped: true, id: id)], root: dir)
+            service.flushSliceNow()
+        }
+        func finishPass() { // until the queued next pass has started
+            var steps = 0
+            while service.passesWaiting > 0 && steps < 1000 { service.flushSliceNow(); steps += 1 }
+        }
+        drop(before + 10) // pass 1
+        drop(before + 20) // during pass 1: pass 2 queued
+        XCTAssertEqual(service.passesWaiting, 1)
+        finishPass() // pass 1 done, pass 2 started
+        XCTAssertLessThan(service.appliedEventId(for: dir) ?? 0, before + 10, "pass 2 is still owed")
+        drop(before + 30) // during pass 2: pass 3 queued
+        finishPass() // pass 2 done: everything up to the drop it covers is applied
+        XCTAssertEqual(service.appliedEventId(for: dir), before + 20)
+        service.sync()
+        XCTAssertEqual(service.appliedEventId(for: dir), before + 30)
     }
 
     /// A 5000-file delete overflows the FSEvents queue, so its own events are the dropped ones.
