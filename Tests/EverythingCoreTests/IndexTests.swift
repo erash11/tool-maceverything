@@ -1057,12 +1057,15 @@ final class IndexTests: XCTestCase {
         let priv = dir("private", root)
         let tmp = dir("tmp", priv)
         file("report.txt", tmp)
+        let users = dir("Users", root)
+        let me = dir("me", users)
+        file("report.pages", dir(".Trash", me)) // moved to the Trash
         index.sortIfNeeded(force: true)
 
         XCTAssertEqual(names(index, "report !temp:"), ["report.md"])
         XCTAssertEqual(names(index, "report temp:"),
-                       ["report-lib", "report.js", "report.md.swp", "report.txt", "~$report.docx"])
-        XCTAssertEqual(names(index, "report").count, 6)
+                       ["report-lib", "report.js", "report.md.swp", "report.pages", "report.txt", "~$report.docx"])
+        XCTAssertEqual(names(index, "report").count, 7)
         // The cached mask follows changes.
         file("report.tmp", proj)
         XCTAssertEqual(names(index, "report !temp:"), ["report.md"])

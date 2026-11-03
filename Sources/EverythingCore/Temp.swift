@@ -1,6 +1,7 @@
 import Foundation
 
-/// Temporary and generated files: what coding tools, editors and browsers leave behind. The
+/// Temporary and generated files: what coding tools, editors and browsers leave behind, and the
+/// Trash. The
 /// `temp:` keyword matches them and everything inside a temp folder; the search window hides
 /// them with `!temp:` unless "Show temp files" is ticked. Nothing is left out of the index.
 enum TempFiles {
@@ -10,6 +11,9 @@ enum TempFiles {
         ".next", ".nuxt", ".turbo", ".parcel-cache", ".svelte-kit", ".angular", ".gradle", ".build",
         "deriveddata", ".tox", ".nox", ".eggs", ".cache", ".npm", ".pnpm-store", ".yarn", ".terraform",
         ".swc", ".expo", ".dart_tool", ".ipynb_checkpoints", ".nyc_output",
+        // The Trash (~/.Trash, and .Trashes on other drives): a file moved there, from the Finder or
+        // the window's Move to Trash, leaves the results like a deleted one.
+        ".trash", ".trashes",
     ].map { Array($0.utf8) }
 
     /// System temp folders, by full path.
