@@ -2,6 +2,9 @@
 
 ## Current state
 **2026-11-03 (read first):**
+- MERGED #26 (gap 6, part B1): drag results out (each row carries its file URL, as a Finder
+  drag; rows of an earlier search give nothing). Tables now use Table(of:) { } rows: { }. App from
+  CI run 41729516896 (main da17c27). Codex: 2 rounds, approved. Live check: Eric. Next: rename (F2).
 - MERGED #25: the Trash counts as temp (`.Trash`, `.Trashes` folders, and roots inside any temp
   folder), so a trashed file leaves the window's results. Found by Eric's #24 test: Move to Trash
   worked, but the row stayed (the file was found again in ~/.Trash). Live: the test file is
@@ -167,7 +170,7 @@ The old Next #5 (delete codex branches, close #10) was already done.
 ## Next
 0. Next PARITY gaps (brief Codex with the existing bounds and that case-sensitive-volume edge
    cases past them are out of scope, or it runs 7+ rounds again, as #17 and #18 did):
-   gap 6 part B (rename F2, drag-out to Finder), then gap 7 (search history, run counts); an incremental
+   gap 6 rename (F2), then gap 7 (search history, run counts); an incremental
    path-order merge if the ~0.2 s rebuild under churn shows up in use. Then the smaller items in the
    2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
 1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
