@@ -248,6 +248,9 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(names(index, "<regex:^game >"), ["game1.mp4"])
         XCTAssertEqual(names(index, "<film/ file:>"), ["game1.mp4", "notes.txt"])
         XCTAssertEqual(names(index, "<report folder:>|game"), ["game1.mp4", "Reports"])
+        XCTAssertEqual(names(index, "<file:>report"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "<file:><report>"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "<!size:>1gb file:>"), ["notes.txt", "q1 report.pdf", "Q2 Report.docx"])
         XCTAssertEqual(names(index, "regex:(?<n>game)"), ["game1.mp4"])
         // !<file: report> = folders, or files without "report".
         XCTAssertEqual(names(index, "!<file: report>"), ["/data", "film", "game1.mp4", "notes.txt", "Reports"])
@@ -272,6 +275,21 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(index.search(Query.parse(String(repeating: "<", count: 33) + "report")).total, 0)
         XCTAssertEqual(index.search(Query.parse(String(repeating: "!<", count: 50_000) + "report")).total, 0)
         XCTAssertEqual(index.search(Query.parse(String(repeating: "<a>|", count: 50_000) + "report")).total, 0)
+        // A regex repeated by the expansion is compiled once; distinct regexes and paths are capped.
+        let repeated = Query.parse("<regex:^q >|<" + Array(repeating: "zz", count: 1000).joined(separator: " ") + ">")
+        XCTAssertEqual(repeated.groups.count, 1000)
+        XCTAssertEqual(CompiledQuery(repeated).regexes.count, 1)
+        XCTAssertEqual(index.search(repeated).total, 2) // q1 report.pdf, Q2 Report.docx
+        // " | " with spaces: inside a regex: word "|" is alternation.
+        let sixteenRegexes = (1...16).map { "regex:x\($0)" }.joined(separator: " | ")
+        XCTAssertNotEqual(Query.parse(sixteenRegexes).groups, [[.invalid(sixteenRegexes)]])
+        let seventeenRegexes = sixteenRegexes + " | regex:x17"
+        XCTAssertEqual(Query.parse(seventeenRegexes).groups, [[.invalid(seventeenRegexes)]])
+        let sixteenPaths = (1...16).map { "p\($0)/" }.joined(separator: "|")
+        XCTAssertNotEqual(Query.parse(sixteenPaths).groups, [[.invalid(sixteenPaths)]])
+        XCTAssertEqual(Query.parse(sixteenPaths + "|p17/").groups, [[.invalid(sixteenPaths + "|p17/")]])
+        // A long regex word full of ">" stays cheap (only its first characters are read).
+        _ = Query.parse("<regex:" + String(repeating: ">", count: 60_000))
     }
 
     func testSizeNamesAndRanges() {

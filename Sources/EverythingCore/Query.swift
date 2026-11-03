@@ -79,7 +79,9 @@ public struct Query {
         while stack.count > 1 { close() } // groups left open close at the end
         guard let root = stack[0].node else { return Query(groups: []) }
         var size = 0
-        guard let groups = conjunctive(root, negate: false, size: &size) else { return Query(groups: [[.invalid(text)]]) }
+        guard let groups = conjunctive(root, negate: false, size: &size), withinScanLimits(groups) else {
+            return Query(groups: [[.invalid(text)]])
+        }
         return Query(groups: groups)
     }
 
@@ -96,6 +98,21 @@ public struct Query {
     /// Most terms a query may expand to. `<a b> | <c d>` expands to (a|c)(a|d)(b|c)(b|d), so each
     /// more OR of groups multiplies; past this the query matches nothing.
     static let maxExpandedTerms = 4096
+
+    /// Each distinct regex keeps a byte per record during a search, and each distinct path needle
+    /// a table of about 5 bytes per record (14 MB per needle on a 2.85M-entry index), so a query
+    /// may hold only this many of each; past it, it matches nothing.
+    static let maxDistinctRegexes = 16
+    static let maxDistinctPaths = 16
+
+    static func withinScanLimits(_ groups: [[Term]]) -> Bool {
+        var regexes = Set<String>(), paths = Set<[UInt8]>()
+        for term in groups.joined() {
+            if case let .regex(p, _) = term { regexes.insert(p) }
+            if case let .pathContains(b, _) = term { paths.insert(b) }
+        }
+        return regexes.count <= maxDistinctRegexes && paths.count <= maxDistinctPaths
+    }
 
     /// `node` (negated when `negate`) as groups ANDed of terms ORed, the form the search runs.
     /// Negation moves down to the terms (De Morgan). Returns nil past maxExpandedTerms.
@@ -158,8 +175,8 @@ public struct Query {
 
     /// Splits on spaces, `|` and `< >`. Quotes keep everything inside as one word. `<` opens a group
     /// only at a word's start (`!<` negates it); `>` closes one only inside a group, never inside a
-    /// `regex:` word (end it with a space: `<regex:a >`), and not right after `:` when a value follows
-    /// (`size:>1gb` compares; `<a file:>` closes).
+    /// `regex:` word (end it with a space: `<regex:a >`), and not right after `size:`, `dm:` or `len:`
+    /// (`<size:>1gb>` compares, then closes; `<file:>report` closes after `file:`).
     static func tokenize(_ text: String) -> [Token] {
         var tokens: [Token] = []
         var current = ""
@@ -168,9 +185,18 @@ public struct Query {
         func flush() {
             if !current.isEmpty { tokens.append(.word(current)); current = "" }
         }
-        func inRegex() -> Bool { current.lowercased().drop(while: { $0 == "!" }).hasPrefix("regex:") }
-        let chars = Array(text)
-        for (i, ch) in chars.enumerated() {
+        // Only the word's first 7 characters, so a long word costs nothing per character.
+        // (parseTerm reads one leading "!", so "!!regex:" is not a regex anyway.)
+        func inRegex() -> Bool {
+            let head = current.prefix(7).lowercased()
+            return head.hasPrefix("regex:") || head.hasPrefix("!regex:")
+        }
+        // The filters whose value can start with ">": there, `>` compares instead of closing.
+        func isComparisonFilter() -> Bool {
+            guard current.utf8.count <= 6 else { return false }
+            return ["size:", "dm:", "len:", "!size:", "!dm:", "!len:"].contains(current.lowercased())
+        }
+        for ch in text {
             if ch == "\"" {
                 inQuotes.toggle()
                 continue
@@ -195,8 +221,7 @@ public struct Query {
                 depth += 1
                 continue
             }
-            let valueFollows = i + 1 < chars.count && !" \t\n|>".contains(chars[i + 1])
-            if ch == ">" && depth > 0 && !(current.hasSuffix(":") && valueFollows) && !inRegex() {
+            if ch == ">" && depth > 0 && !isComparisonFilter() && !inRegex() {
                 flush()
                 tokens.append(.close)
                 depth -= 1

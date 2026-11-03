@@ -69,6 +69,8 @@ struct CompiledQuery {
     var pathTerms: [Int] = []
     /// Needle -> its PathTable, so a needle repeated by `< >` expansion builds one table.
     private var pathTable: [[UInt8]: Int] = [:]
+    /// Pattern -> its index in `regexes`, for the same reason.
+    private var regexIndex: [String: Int] = [:]
     var hasRegex = false
     var hasTemp = false
 
@@ -113,7 +115,14 @@ struct CompiledQuery {
         case let .glob(n, neg):
             t.kind = Kind.glob; t.negated = neg; t.start = addBytes(n); t.length = n.count
         case let .regex(pattern, neg):
-            t.kind = Kind.regex; t.negated = neg; t.start = regexes.count
+            t.kind = Kind.regex; t.negated = neg
+            // A pattern repeated by `< >` expansion shares one compiled regex and one set of hits.
+            if let k = regexIndex[pattern] {
+                t.start = k; t.a = Int64(regexLiteralStart[k]); t.b = Int64(regexLiteralLength[k])
+                return t
+            }
+            t.start = regexes.count
+            regexIndex[pattern] = regexes.count
             regexes.append(try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]))
             lineRegexes.append(RegexSupport.isLineSafe(pattern)
                 ? try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .anchorsMatchLines])
