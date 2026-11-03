@@ -68,7 +68,7 @@ The old Next #5 (delete codex branches, close #10) was already done.
    plus a test tweak.
 2. The menu-bar app no longer builds on this Mac (Gotchas): install full Xcode, or wait for
    Command Line Tools that ship SwiftUIMacros. Until then `scripts/install.sh` stops at
-   `make-app.sh`; the installed 2026-10-16 app keeps running.
+   `make-app.sh`; install the app from CI with `scripts/install-app-from-ci.sh` (Gotchas).
 3. On the Mac: Locations window (menu bar > Locations…), live updates (create, rename, delete a
    file and check `ev`), unplug and replug CRASHBOX. Rest of the #2 checklist.
 4. Post the real-Mac numbers on #3 and close it (GitHub MCP was down at the end of 2026-10-16).
@@ -83,7 +83,9 @@ The old Next #5 (delete codex branches, close #10) was already done.
   let CI run the tests.
 - Since macOS 27 / Swift 6.4 Command Line Tools (2026-10-24), plain `swift build` fails in
   EverythingApp: "plugin for module 'SwiftUIMacros' not found" (it ships only with Xcode).
-  `swift build -c release --product everythingd` (and `--product ev`) still work.
+  `swift build -c release --product everythingd` (and `--product ev`) still work. For the app,
+  run `scripts/install-app-from-ci.sh`: it installs the ad-hoc signed bundle CI uploads (artifact
+  `MacEverything-app`) into ~/Applications and leaves ev and the daemon alone.
 - Daemon-only install while the app cannot build: copy `.build/release/everythingd` to
   `build/`, sign it with `codesign --force --options runtime --sign "MacEverything Local
   Signing" --identifier com.erash11.maceverything.daemon`, check `codesign -d -r-` matches the

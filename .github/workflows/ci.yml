@@ -34,6 +34,16 @@ jobs:
           .build/release/ev --bench-searchfs /System/Volumes/Data
       - name: Bundle the app
         run: ./scripts/make-app.sh && ls -la build
+      # Upload now, while the app is ad-hoc signed: the next step re-signs it with a throwaway
+      # CI certificate that no other Mac trusts. ditto keeps the bundle's signature intact.
+      # scripts/install-app-from-ci.sh installs this artifact.
+      - name: Zip the app bundle
+        run: ditto -c -k --keepParent build/MacEverything.app build/MacEverything.app.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MacEverything-app
+          path: build/MacEverything.app.zip
+          if-no-files-found: error
       - name: Stable signing identity (issue 7)
         run: |
           ./scripts/create-signing-cert.sh --ci
