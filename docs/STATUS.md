@@ -2,110 +2,14 @@
 
 ## Current state
 **2026-11-03 (read first):**
-- MERGED #26 (gap 6, part B1): drag results out (each row carries its file URL, as a Finder
-  drag; rows of an earlier search give nothing). Tables now use Table(of:) { } rows: { }. App from
-  CI run 41729516896 (main da17c27). Codex: 2 rounds, approved. Live check: Eric. Next: rename (F2).
-- MERGED #25: the Trash counts as temp (`.Trash`, `.Trashes` folders, and roots inside any temp
-  folder), so a trashed file leaves the window's results. Found by Eric's #24 test: Move to Trash
-  worked, but the row stayed (the file was found again in ~/.Trash). Live: the test file is
-  `!temp:` 0; `temp:` 853,625 -> 1,055,561. Daemon/ev from `main` 00fc4d3 (backups
-  `*.pre-trash-2026-11-03`), app from main CI. Codex: 2 rounds, approved. Confirmed by Eric:
-  Cmd+Delete on a test file, the row vanished (2026-11-03).
-- MERGED #24 (gap 6, part A): in the results list, Cmd+C copies the files (paste in Finder),
-  Cmd+Shift+C / Cmd+Option+C copy the paths, Cmd+Delete moves to Trash (list refreshes 1.5 s
-  later), Cmd+Return shows in Finder; context menu gains Copy and Move to Trash. Every file
-  action takes only rows of the current search. App installed from CI run 41720026226 (main
-  625d487). Codex: 4 rounds, approved. Live: Eric's test moved the file to the Trash (row
-  stayed until #25). Gap 6 part B next: rename (F2), drag-out.
-- MERGED #23: Ctrl+1 to Ctrl+6 sort (name, path, size, extension, type, date modified; the same
-  keys again flip), through the panel's key monitor setting the table's sortOrder. App installed
-  from CI run 41714483456 (main 405c9fa). Codex: 1 round, approved. Confirmed working by Eric.
-- MERGED #22: sort by Type and Extension (daemon keys `type`, `extension`; app columns sortable;
-  the Type and Extension columns now show the text the daemon sorts by, from public
-  `FileKinds.kindName`/`extensionName`). Keys are worked out as the heap reads them (memory
-  O(rows asked for)). Live through the daemon, `a` (1.6M matches), warm: type 45 ms, extension
-  62 ms, size 23 ms (the first type sort after a start pays the kind cache build). Installed:
-  daemon/ev from `main` 0aecf37 (backups `*.pre-typesort-2026-11-03`), app from CI run
-  41711460748. Codex: 3 rounds, approved. Header click confirmed working by Eric (2026-11-03).
-  (Accessibility can't open the panel: the menu item press doesn't open it.)
-  Note: the Mac's load average hit 140 this afternoon from other apps; timings then were 5x slow.
-- MERGED #21 (gap 3, was Next c): Down Arrow in the search box selects the first row (keeps a
-  selection still among the results) and moves focus to the list (AppKit makeFirstResponder;
-  @FocusState did nothing on a second visit, seen live). Waits for current results; Return in the
-  box also waits and opens only current rows. App installed from CI run 41697754145 (main 0b4b385).
-  Codex: 5 rounds, approved. Live: confirmed working by Eric on the installed build (2026-11-03). Lesson: when the panel isn't frontmost,
-  System Events keys go to the front app (they landed in Ghostty once, no Return sent).
-- MERGED #20 (gap 5, was Next b2): fast Path/Size/Date sorts. Path: a cached path order (folder
-  first, then names: `/a/z` before `/a b`, a change from text order), rebuilt only when records
-  are added (~0.2 to 0.27 s; under file churn most first path sorts pay it), 8 B/record. Size and
-  date: heap of the rows asked for, (key, id) total order. Live through the daemon, `a` (1.6M
-  matches): path 266 ms first page, 30 ms next page (was 2.5 s and 2.3 s); size 33 ms (was
-  401); date 30 ms (was 232). Daemon 385.5 MB. Installed from `main` 8bc64a0 (backups
-  `*.pre-sorts-2026-11-03`). Codex: 1 round, approved.
-- MERGED #19: `type:` matches the kind as macOS names it (UTType description of the extension;
-  `.app` and other packages their own kind; folders `folder`; no known extension `document`).
-  Per-record kind cache like `tempMask()` (4 B/record; 7,147 extensions, 241 kinds; built once,
-  0.45 to 0.75 s on the first `type:` search after a start or compaction, then 10 to 35 ms).
-  Installed from `main` 8780b4f (backups `*.pre-type-2026-11-03`). Live through the daemon:
-  `type:pdf` 38,373, `type:application` 1,874, `type:image` 101,845. Codex: 3 rounds, approved.
-  Gap 2 left: `dc:` (needs creation dates in the index), `child:`, `name:`/`stem:`/`extension:`.
-- MERGED #18 (gap 2, part C): `parent:`/`infolder:` (direct children; case ignored; walks from
-  every root the path starts with), `depth:`/`parents:` (path parts: `/` 0, `/Volumes/X` 2),
-  `childcount:`, `empty:` (folders only). A root such as /Volumes/CRASHBOX counts as a child of
-  the indexed folder at its exact path (/Volumes is recorded by the walk of / but not entered).
-  Limit: all `parent:` paths of a query may name 4,096 folders. Installed from `main` 9441e9a
-  (backups `*.pre-folders-2026-11-03`). Live: `parent:/Users` 3, `parent:/Volumes` 1,
-  `depth:<=2` 263, `empty:` 145,366. Codex: 7 rounds; R7-F1 (Unicode case folding, e.g. Greek
-  final sigma) rejected: name search has the same limit; fix it in `searchForm` for all searches.
-  Gap 2 is now done except `type:`, `dc:`, `child:`.
-- MERGED #17 (gap 2, part B): `< >` grouping (`<a b> | c`, `!<a b>`, nesting). Groups flatten to
-  the AND-of-ORs the matcher runs. Limits (past one, no results, no message): 32 deep, 4,096
-  expanded terms, 256 tests per record (an `ext:` counts each extension; measured: a 256-way OR
-  takes 2.5 s under load), 16 distinct `regex:`, 16 distinct `path:`; also checked in the scan,
-  so scope + filter count. Installed from `main` a5758c1 (backups `*.pre-groups-2026-11-03`).
-  Live: `<report 2026>|invoice` 457 = 290 + 167. Codex: 9 rounds (Eric raised the cap); last
-  REVISE (R18, wording only). Follow-ups: regex time limit (`^(a+)+$` has none; older than #17);
-  a refused query shows 0 results with no message (PARITY "Feedback on bad syntax").
-- MERGED #16 (gap 2, part A): `case:`, `ww:`/`wholeword:`, `wfn:`/`wholefilename:`, `startwith:`,
-  `endwith:`, `len:`, `image:` (= `pic:`). Also every wildcard `?` is now one character, not one
-  byte. `case:` checks the stored name only (Codex found 3 ways a lowercase first test drops real
-  matches). Daemon and `ev` installed from `main` 5c0a4bd (backups `*.pre-modifiers-2026-11-03`).
-  Codex: 4 rounds, approved. Live: `case:Report` 2,378, `ww:report` 5,615, `image:` = `pic:` 100,623.
-- MERGED #15: `dm:` periods (this/last week, month, year), rolling windows (`last7days`,
-  `past3weeks`, `last12hours`; open-ended, so future dates count; `>`/`<` compare with the
-  cutoff), `2026`, `2026-10`, `a..b` ranges; `size:` names (empty, tiny = 1 B to 10 KB, small,
-  medium, large, huge, gigantic) and ranges. `dm:thisweek` is now the calendar week (was the last
-  7 days). Daemon and `ev` installed from `main` eb344e6 (backups `*.pre-dates-2026-11-03`).
-  Codex: 5 rounds; the last fix (a rolling window can't be a range end) is after the cap, not
-  Codex-reviewed. Scrolling past row 500 confirmed by Eric.
-- The GitHub repo is now `erash11/tool-maceverything` (planned rename, ~/DEV/REPO_CHANGES.md);
-  `scripts/install-app-from-ci.sh` still names the old repo and works through GitHub's redirect.
-- MERGED #14: the results list loads more rows as you scroll (first 500, then 2000 per page by
-  offset; `ResultPages` in EverythingCore). App installed from CI run 41660743834. Codex: 5
-  rounds, approved. Scrolling past row 500 NOT yet seen in the window. Page cost: name sort 39 to
-  89 ms; path sort 3.3 to 3.8 s per page (daemon re-sorts all matches; next fix candidate).
-- Option-Space confirmed working by Eric (2026-11-03).
-- MERGED: #13 (unreadable filter values match nothing), #12 (live-update stall fix + index save
-  off the update queue), #11 (CI builds the app). Installed from `main` 31721f0-equivalent code:
-  `~/.local/bin/everythingd` and `ev` (backups `*.pre-savefix-2026-11-03`), and the app from CI
-  run 41654434583 via `scripts/install-app-from-ci.sh` (old app zipped at
-  `~/Library/Application Support/MacEverything/MacEverything-app-2026-10-16.zip`). Login item kept.
-  Option-Space not checked (macOS blocks scripted key presses).
-- parity_check, 3 runs after the fix: every live-update check passed (incl. 5000 files at once).
-  Speed failed under load 30 to 40 on 6 cores (3 to 9 searches over 100 ms per run); idle medians
-  27 to 93 ms, same as 11-02. Detail on PR #12's last comment.
-- Save probe (`ev --save` while creating a file): file seen in 1.3 s during a save (was 18.1 s).
-- Drive trial FAILED: 5,119 "giving up" lines (4,808 in the 12:00 UTC hour, while another job
-  trashed Drive files via `gws`). Drive turned off: config.json renamed to
-  `~/Library/Application Support/MacEverything/config.json.drive-trial-2026-11-03` (rename back
-  to undo). 0 entries under `~/Library/CloudStorage` now.
-- Correction: the daemon's 30 s check only ADDS locations from config.json. Removing one needs a
-  restart: `launchctl kickstart -k gui/$(id -u)/com.erash11.maceverything.daemon`.
-- Open from Codex (rejected for now, reasons on PR #12): shutdown during a slow save waits for two
-  writes; a shutdown save can hold a partial walk (cursor stays behind, restart replays). Cheap
-  follow-up: `ExitTimeOut` in the launchd plist.
-- Seen: a whole-`/` re-list after many dropped events took 389 s in slices (was ~118 s in one go);
-  live changes still applied in 1 to 3 s meanwhile.
+- Parity PRs #15 to #26 merged and installed today (daemon, `ev`, app from CI; `main` dc0a91a+).
+  Query: dates, sizes, modifiers, `< >` groups, `parent:`/`depth:`/`childcount:`/`empty:`,
+  `type:`. Window: fast sorts (all six keys), Ctrl+1..6, Down Arrow, file actions, drag-out; the
+  Trash hidden like temp files. Eric confirmed Down Arrow, Type sort, Ctrl+1..6, Move to Trash.
+- Drag-out (#26) waits on Eric's live check. Per-PR detail, numbers, backups and decisions:
+  `docs/handoffs/2026-11-03-parity-prs-18-26.md`.
+- Drive trial is off (config renamed to `config.json.drive-trial-2026-11-03`); 0 entries under
+  ~/Library/CloudStorage.
 
 **2026-11-02/03 parity work:**
 - `scripts/parity_check.py` (Codex-reviewed, 5 rounds) times live updates and searches on the
@@ -168,27 +72,36 @@ still fails to build (same SwiftUIMacros error; Command Line Tools now Swift 6.4
 The old Next #5 (delete codex branches, close #10) was already done.
 
 ## Next
-0. Next PARITY gaps (brief Codex with the existing bounds and that case-sensitive-volume edge
-   cases past them are out of scope, or it runs 7+ rounds again, as #17 and #18 did):
-   gap 6 rename (F2), then gap 7 (search history, run counts); an incremental
-   path-order merge if the ~0.2 s rebuild under churn shows up in use. Then the smaller items in the
-   2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
-1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
+1. Gap 6 rename (F2): `git checkout -b rename-f2`, then in
+   `Sources/EverythingApp/EverythingApp.swift` add F2 to `watchKeys` (list has the keys, one
+   current row via `act(on:_:)`): a small sheet with the name selected up to the extension, then
+   `FileManager.moveItem` in the same folder and `model.refreshAfterChange()`. Brief Codex with the
+   existing bounds; case-sensitive-volume edge cases past them are out of scope.
+2. Gap 7 (search history, run counts). Then an incremental path-order merge only if the ~0.2 s
+   rebuild under churn shows up in use; the smaller items in `docs/handoffs/2026-11-03-parity-handoff.md`
+   (OneDrive group container, `ev --daemon-only`).
+3. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
    location; `SearchScope.choices` lists every ~/Library/CloudStorage folder today. Small change
    plus a test tweak.
-2. The menu-bar app no longer builds on this Mac (Gotchas): install full Xcode, or wait for
-   Command Line Tools that ship SwiftUIMacros. Until then `scripts/install.sh` stops at
-   `make-app.sh`; install the app from CI with `scripts/install-app-from-ci.sh` (Gotchas).
-3. On the Mac: Locations window (menu bar > Locations…), live updates (create, rename, delete a
-   file and check `ev`), unplug and replug CRASHBOX. Rest of the #2 checklist.
-4. Post the real-Mac numbers on #3 and close it (GitHub MCP was down at the end of 2026-10-16).
-5. Optional: folders that each take exactly 6.0 s to list (once OneDrive; in the 2026-10-24
-   scan, sandbox folders under ~/Library/Containers); Type column sorting.
+4. The menu-bar app no longer builds on this Mac (Gotchas): install full Xcode, or wait for
+   Command Line Tools that ship SwiftUIMacros. Until then install the app from CI with
+   `scripts/install-app-from-ci.sh` (Gotchas).
+5. On the Mac: Locations window (menu bar > Locations…), unplug and replug CRASHBOX. Rest of the
+   #2 checklist. Post the real-Mac numbers on #3 and close it.
+6. Optional: folders that each take exactly 6.0 s to list (once OneDrive; in the 2026-10-24 scan,
+   sandbox folders under ~/Library/Containers).
 
 ## Open questions
 - None. #9 decided 2026-10-16: keep building (see `docs/DECISIONS.md`).
 
 ## Gotchas
+- Never send System Events key presses unless MacEverything is frontmost and its panel is
+  window 1: once the panel was hidden and test keys landed in Ghostty (2026-11-03). Eric uses the
+  Mac at the same time. Accessibility presses can't open the panel either (the menu-bar Search
+  item ignores AXPress), so app UI checks go to Eric; read state with Accessibility only.
+- dcg blocks a Bash heredoc that mixes backticks with `$()`: write a script file, then run it.
+- `ev --direct` reads the saved index file, which can be minutes older than the live daemon
+  (a just-trashed file still showed in Downloads there). Check live state with plain `ev`.
 - On the Mac, `swift test` fails with "no such module 'XCTest'" (no full Xcode). Build locally,
   let CI run the tests.
 - Since macOS 27 / Swift 6.4 Command Line Tools (2026-10-24), plain `swift build` fails in
