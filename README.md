@@ -58,7 +58,7 @@ Grant Full Disk Access one more time after that install; later rebuilds keep it.
 | `"game film"` | exact phrase |
 | `a \| b` | either word |
 | `!draft` | names without the word |
-| `<report 2026> \| invoice`, `!<draft old>` | groups (a `>` right after `:` compares: `<size:>1gb>`; end a `regex:` with a space before `>`) |
+| `<report 2026> \| invoice`, `!<draft old>` | groups (a `>` right after `size:`, `dm:` or `len:` compares: `<size:>1gb>`; end a `regex:` with a space before `>`; at most 256 tests, so `<8 words>\|<8 words>` works and `<16 words>\|<16 words>` doesn't) |
 | `*.pdf`, `IMG_????.jpg` | wildcards on the whole name |
 | `ext:mp4;mov` | any listed extension |
 | `path:Football` | the word anywhere in the full path |

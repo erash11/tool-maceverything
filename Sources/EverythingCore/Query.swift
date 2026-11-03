@@ -64,17 +64,17 @@ public struct Query {
             if let node = frame.node { stack[stack.count - 1].add(node) }
         }
         let tokens = tokenize(text)
-        // Every word is at least one term, so past maxExpandedTerms words the query can't fit:
+        // Every word is at least one term, so past maxTestsPerRecord words the query can't fit:
         // stop before reading any of them (each regex: word compiles a regex to check it).
         var words = 0
         // Distinct regex patterns too, before parseTerm compiles any (it strips one "!", as here).
-        var patterns = Set<Substring>()
+        var patterns = Set<[UInt8]>() // exact bytes: "é" and "e" + U+0301 are different patterns
         for case let .word(w) in tokens {
             words += 1
             let body = w.hasPrefix("!") && w.count > 1 ? w.dropFirst() : w[...]
-            if body.prefix(6).lowercased() == "regex:" { patterns.insert(body.dropFirst(6)) }
+            if body.prefix(6).lowercased() == "regex:" { patterns.insert(Array(body.dropFirst(6).utf8)) }
         }
-        if words > maxExpandedTerms || patterns.count > maxDistinctRegexes { return Query(groups: [[.invalid(text)]]) }
+        if words > maxTestsPerRecord || patterns.count > maxDistinctRegexes { return Query(groups: [[.invalid(text)]]) }
         for token in tokens {
             switch token {
             case .or:
@@ -124,10 +124,10 @@ public struct Query {
     static let maxTestsPerRecord = 256
 
     static func withinScanLimits(_ groups: [[Term]]) -> Bool {
-        var regexes = Set<String>(), paths = Set<[UInt8]>()
+        var regexes = Set<[UInt8]>(), paths = Set<[UInt8]>()
         var tests = 0
         for term in groups.joined() {
-            if case let .regex(p, _) = term { regexes.insert(p) }
+            if case let .regex(p, _) = term { regexes.insert(Array(p.utf8)) }
             if case let .pathContains(b, _) = term { paths.insert(b) }
             if case let .ext(list, _) = term { tests += list.count } else { tests += 1 }
         }

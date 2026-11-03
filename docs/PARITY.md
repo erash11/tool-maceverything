@@ -41,7 +41,7 @@ Source: [Search Syntax](https://www.voidtools.com/support/everything/search_synt
 | OR (`\|`) | `abc\|123`; spaces around `\|` ignored | **Have**: Query.swift:34-36, :63-66 | `ev --count 'report\|invoice'` = `ev --count 'report \| invoice'` (5636) |
 | NOT (`!`) | `!abc` excludes | **Have**: Query.swift:77-80 | `ev --count '!report'` = total − 5478 |
 | Precedence OR before AND | `apple banana \| orange` = apple AND (banana OR orange) | **Have**: Query.swift:39-43 (OR joins into the previous group) | `ev --count 'report 2026 \| invoice'` |
-| Grouping `< >` | `!<abc 123>`, `<a b>\|c` | **Have** (2026-11-03): nested up to 32 deep, `!<…>`, OR between groups; expanded to AND-of-ORs, capped at 4,096 terms (past it: no results). `>` inside `regex:` is text | `ev --count '<report 2026>\|invoice'` (457) = `report 2026` (290) + `invoice` (167) |
+| Grouping `< >` | `!<abc 123>`, `<a b>\|c` | **Have** (2026-11-03): nested up to 32 deep, `!<…>`, OR between groups; expanded to AND-of-ORs; past 256 tests per record (an `ext:` counts each extension), 16 regexes or 16 paths: no results, no message. `>` inside `regex:` is text | `ev --count '<report 2026>\|invoice'` (457) = `report 2026` (290) + `invoice` (167) |
 | Quotes | `"c:\program files\"` is literal, spaces included | **Have**: Query.swift:54-57 | `ev --count '"game film"'` |
 | Wildcards `*` `?`, whole-name match | `*.mp3`, `foo*` | **Have**: Query.swift:117-118, Search.swift:426-445 | `ev --count '*.pdf'` (28,295); `ev --count 'report*'` (1412) |
 | Wildcards in a path term | `c:\*\downloads\*.pdf`; `**` crosses folders | **Missing**: any `*` makes the term a name-only glob, checked before `/` (Query.swift:117-121) | `ev --count '/downloads/*.pdf'` = 0; workaround `'/downloads/ *.pdf'` = 10 |

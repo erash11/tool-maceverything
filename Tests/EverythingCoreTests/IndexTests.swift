@@ -207,6 +207,17 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(index.search(Query.parse("*?.pdf")).total, 1)
     }
 
+    func testRegexesThatLookEqualAreKeptApart() {
+        // "e" + U+0301 and "é" are equal Swift Strings but different patterns; the index form is precomposed.
+        let index = FileIndex()
+        let root = index.addRoot("/d")
+        index.add(ScannedEntry(name: "e\u{301}.txt", isDirectory: false, size: 1, modified: 0), parent: root)
+        index.sortIfNeeded(force: true)
+        let q = Query.parse("regex:^e\u{301}\\. | regex:^\u{E9}\\.")
+        XCTAssertEqual(CompiledQuery(q).regexes.count, 2)
+        XCTAssertEqual(index.search(q).total, 1)
+    }
+
     func testCaseWhereLowercaseDependsOnContext() {
         // "ΟΣ" lowercases to "ος" (final sigma), but a lone "Σ" to "σ": a lowercase first test would miss it.
         let index = FileIndex()
