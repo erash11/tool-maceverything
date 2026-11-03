@@ -299,7 +299,6 @@ struct SearchView: View {
     @State private var selection = Set<String>()
     @State private var sortOrder = [KeyPathComparator(\SearchHit.name)]
     @FocusState private var fieldFocused: Bool
-    @FocusState private var tableFocused: Bool
     /// The Down Arrow watcher (see watchDownArrow); removed when the view goes away.
     @State private var keyMonitor: Any?
     /// Down was pressed while the results were still those of an earlier search.
@@ -345,7 +344,6 @@ struct SearchView: View {
             }
             .padding(10)
             resultsTable
-                .focused($tableFocused)
             HStack {
                 Text(model.message).font(.caption).foregroundStyle(.secondary)
                 Spacer()
@@ -543,11 +541,22 @@ struct SearchView: View {
 
     private func moveIntoResults(_ hits: [SearchHit]) {
         downPending = false
-        guard let first = hits.first else { return }
+        guard let first = hits.first, let window = NSApp.keyWindow, Self.searchBoxHasKeys(window),
+              let table = Self.tableView(in: window.contentView) else { return }
         // Keep only selected rows that are still results; none left selects the first.
         let kept = selection.intersection(hits.map(\.path))
         selection = kept.isEmpty ? [first.path] : kept
-        tableFocused = true
+        // AppKit, not @FocusState: a focus flag SwiftUI still holds from an earlier visit to the
+        // list (focus then moved by a click) makes setting it again do nothing (seen live).
+        window.makeFirstResponder(table)
+    }
+
+    /// The results list's AppKit table (SwiftUI's Table is an NSTableView; the panel has one).
+    private static func tableView(in view: NSView?) -> NSTableView? {
+        guard let view else { return nil }
+        if let table = view as? NSTableView { return table }
+        for sub in view.subviews { if let table = tableView(in: sub) { return table } }
+        return nil
     }
 
     /// Return in the search box: the selected rows that are current results, else the first row.
