@@ -1,6 +1,7 @@
 import Foundation
 
-/// Temporary and generated files: what coding tools, editors and browsers leave behind. The
+/// Temporary and generated files: what coding tools, editors and browsers leave behind, and the
+/// Trash. The
 /// `temp:` keyword matches them and everything inside a temp folder; the search window hides
 /// them with `!temp:` unless "Show temp files" is ticked. Nothing is left out of the index.
 enum TempFiles {
@@ -10,6 +11,9 @@ enum TempFiles {
         ".next", ".nuxt", ".turbo", ".parcel-cache", ".svelte-kit", ".angular", ".gradle", ".build",
         "deriveddata", ".tox", ".nox", ".eggs", ".cache", ".npm", ".pnpm-store", ".yarn", ".terraform",
         ".swc", ".expo", ".dart_tool", ".ipynb_checkpoints", ".nyc_output",
+        // The Trash (~/.Trash, and .Trashes on other drives): a file moved there, from the Finder or
+        // the window's Move to Trash, leaves the results like a deleted one.
+        ".trash", ".trashes",
     ].map { Array($0.utf8) }
 
     /// System temp folders, by full path.
@@ -42,6 +46,14 @@ enum TempFiles {
     static func hasPrefix(_ lower: UnsafeBufferPointer<UInt8>, _ start: Int, _ len: Int, _ word: [UInt8]) -> Bool {
         if word.count > len { return false }
         return equal(lower, start, word.count, word)
+    }
+
+    /// Whether some folder in `path` is one of folderNames ("/Users/me/.Trash/archive").
+    static func pathHasTempFolder(_ path: String) -> Bool {
+        path.split(separator: "/").contains { part in
+            let lower = Array(FileIndex.searchForm(String(part)).utf8)
+            return folderNames.contains(lower)
+        }
     }
 
     /// Whether one record's own name marks it as temp.
@@ -78,6 +90,9 @@ extension FileIndex {
             for i in first..<recs.count where mask[i] == 0 {
                 let r = recs[i]
                 if (r.parent >= 0 && mask[Int(r.parent)] != 0) || TempFiles.isTemp(r, lower) { mask[i] = 1 }
+                // A root's name is its whole path, with no parent to inherit from: it is temp when
+                // any part of it is a temp folder (a location added inside the Trash or node_modules).
+                if r.parent < 0 && mask[i] == 0 && TempFiles.pathHasTempFolder(name(of: Int32(i))) { mask[i] = 1 }
             }
         }}
         tempMaskCache = (records.count, deletedCount, mask)

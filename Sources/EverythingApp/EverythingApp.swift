@@ -358,7 +358,7 @@ struct SearchView: View {
                 Text(model.message).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Toggle("Show temp files", isOn: $model.showTemp).toggleStyle(.checkbox)
-                    .help("Temp and generated files: node_modules, .git, build folders, caches, *.tmp, system temp folders")
+                    .help("Temp and generated files: node_modules, .git, build folders, caches, *.tmp, system temp folders, the Trash")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
