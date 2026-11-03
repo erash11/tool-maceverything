@@ -2,12 +2,17 @@
 
 ## Current state
 **2026-11-03 (read first):**
+- MERGED #25: the Trash counts as temp (`.Trash`, `.Trashes` folders, and roots inside any temp
+  folder), so a trashed file leaves the window's results. Found by Eric's #24 test: Move to Trash
+  worked, but the row stayed (the file was found again in ~/.Trash). Live: the test file is
+  `!temp:` 0; `temp:` 853,625 -> 1,055,561. Daemon/ev from `main` 00fc4d3 (backups
+  `*.pre-trash-2026-11-03`), app from main CI. Codex: 2 rounds, approved.
 - MERGED #24 (gap 6, part A): in the results list, Cmd+C copies the files (paste in Finder),
   Cmd+Shift+C / Cmd+Option+C copy the paths, Cmd+Delete moves to Trash (list refreshes 1.5 s
   later), Cmd+Return shows in Finder; context menu gains Copy and Move to Trash. Every file
   action takes only rows of the current search. App installed from CI run 41720026226 (main
-  625d487). Codex: 4 rounds, approved. Live check: Eric (test file
-  ~/Downloads/maceverything-trash-test.txt). Gap 6 part B next: rename (F2), drag-out.
+  625d487). Codex: 4 rounds, approved. Live: Eric's test moved the file to the Trash (row
+  stayed until #25). Gap 6 part B next: rename (F2), drag-out.
 - MERGED #23: Ctrl+1 to Ctrl+6 sort (name, path, size, extension, type, date modified; the same
   keys again flip), through the panel's key monitor setting the table's sortOrder. App installed
   from CI run 41714483456 (main 405c9fa). Codex: 1 round, approved. Confirmed working by Eric.
