@@ -191,6 +191,19 @@ final class SearchModel: ObservableObject {
         }
     }
 
+    /// Searches again after the app changed files (Move to Trash). File events reach the daemon
+    /// after a short delay, then `sync` applies everything queued, so the new search sees the change.
+    /// shortcut: a fixed 1 s wait for the event; ask the daemon to rescan the folders if that
+    /// ever proves too short.
+    func refreshAfterChange() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            self.queue.async {
+                _ = try? IPC.send(IPCRequest(command: "sync"))
+                DispatchQueue.main.async { self.run() }
+            }
+        }
+    }
+
     /// Whether `hits` are the first page of the search the box, scope and filter now ask for (not
     /// rows of an earlier one still waiting to be replaced).
     var hitsAreCurrent: Bool { pagesGeneration == generation }
@@ -375,10 +388,6 @@ struct SearchView: View {
             if (note.object as? NSWindow)?.identifier == Self.panelID { downPending = false }
         }
         .onExitCommand { NSApp.keyWindow?.orderOut(nil) }
-        .onCopyCommand {
-            let paths = selection.isEmpty ? [] : Array(selection)
-            return paths.isEmpty ? [] : [NSItemProvider(object: paths.joined(separator: "\n") as NSString)]
-        }
     }
 
     // MARK: - Results table
@@ -498,7 +507,11 @@ struct SearchView: View {
             .contextMenu(forSelectionType: String.self) { paths in
                 Button("Open") { open(paths, reveal: false) }
                 Button("Reveal in Finder") { open(paths, reveal: true) }
+                Divider()
+                Button("Copy") { copyFiles(paths) }
                 Button("Copy Path") { copy(paths) }
+                Divider()
+                Button("Move to Trash") { moveToTrash(paths) }
             } primaryAction: { paths in
                 open(paths, reveal: false)
             }
@@ -514,6 +527,25 @@ struct SearchView: View {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            // File commands while the list has the keys, on the selected current rows: Cmd+C copies the
+            // files (paste them in Finder), Cmd+Shift+C (Everything) or Cmd+Option+C (Finder) their
+            // paths as text, Cmd+Delete moves them to the Trash, Cmd+Return shows them in Finder.
+            if Self.listHasKeys(event.window) {
+                let c = UInt16(kVK_ANSI_C)
+                let action: ((Set<String>) -> Void)?
+                switch (event.keyCode, modifiers) {
+                case (c, [.command]): action = copyFiles
+                case (c, [.command, .shift]), (c, [.command, .option]): action = copy
+                case (UInt16(kVK_Delete), [.command]): action = moveToTrash
+                case (UInt16(kVK_Return), [.command]): action = { open($0, reveal: true) }
+                default: action = nil
+                }
+                if let action {
+                    let rows = currentSelection()
+                    if rows.isEmpty { NSSound.beep() } else { action(rows) }
+                    return nil
+                }
+            }
             // Ctrl+1 to Ctrl+6 anywhere in the search panel: see sortShortcuts.
             if modifiers == .control, event.window?.identifier == SearchView.panelID,
                let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }),
@@ -533,6 +565,18 @@ struct SearchView: View {
             }
             return nil
         }
+    }
+
+    /// Whether `window` is the search panel and its results list holds the keys.
+    private static func listHasKeys(_ window: NSWindow?) -> Bool {
+        window?.identifier == panelID && window?.firstResponder is NSTableView
+    }
+
+    /// The selected rows that belong to the current search (none while rows of an earlier one are
+    /// still shown), so a command never acts on a file that doesn't match what was typed.
+    private func currentSelection() -> Set<String> {
+        guard model.hitsAreCurrent else { return [] }
+        return selection.intersection(model.hits.map(\.path))
     }
 
     /// Whether `window` is the search panel and a text field's editor (the search box: the
@@ -603,9 +647,27 @@ struct SearchView: View {
         }
     }
 
+    /// The paths as text, one per line.
     private func copy(_ paths: Set<String>) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(paths.sorted().joined(separator: "\n"), forType: .string)
+    }
+
+    /// The files themselves, as Finder's Copy puts them: paste in Finder copies them there.
+    private func copyFiles(_ paths: Set<String>) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects(paths.sorted().map { URL(fileURLWithPath: $0) as NSURL })
+    }
+
+    /// Moves the files to the Trash (Finder's Move to Trash: Put Back works), then searches again
+    /// once the index has the change.
+    private func moveToTrash(_ paths: Set<String>) {
+        NSWorkspace.shared.recycle(paths.sorted().map { URL(fileURLWithPath: $0) }) { _, error in
+            DispatchQueue.main.async {
+                if let error { model.message = "Couldn't move to Trash: \(error.localizedDescription)" }
+                model.refreshAfterChange()
+            }
+        }
     }
 }
 
