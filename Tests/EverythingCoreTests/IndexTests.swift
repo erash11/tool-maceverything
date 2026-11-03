@@ -380,6 +380,52 @@ final class IndexTests: XCTestCase {
         }
     }
 
+    func testTypeMatchesKinds() {
+        // Kind texts come from the system and are localized, so only "pdf", "folder" and this code's
+        // own "document" are written out; the rest is checked against each record's kind.
+        let index = makeIndex()
+        let root = index.lookup("/data")!
+        let tool = index.add(ScannedEntry(name: "Tool.app", isDirectory: true, size: 0, modified: 0), parent: root)
+        index.add(ScannedEntry(name: "Info.plist", isDirectory: false, size: 1, modified: 0), parent: tool)
+        for name in ["x.zzqq", ".bashrc", "trailing.", "noext", "a.8f3a9b2c4d5e6f7a8b9c", "R\u{E9}sum\u{E9}.PDF", "pic.jpeg"] {
+            index.add(ScannedEntry(name: name, isDirectory: false, size: 1, modified: 0), parent: root)
+        }
+        index.sortIfNeeded(force: true)
+        XCTAssertEqual(names(index, "type:pdf"), ["q1 report.pdf", "R\u{E9}sum\u{E9}.PDF"])
+        XCTAssertEqual(names(index, "TYPE:PDF !ext:pdf"), [])
+        XCTAssertEqual(names(index, "type:folder"), ["/data", "film", "Reports"]) // an .app is a package
+        XCTAssertEqual(names(index, "type:folder | type:pdf"), ["/data", "film", "q1 report.pdf", "Reports", "R\u{E9}sum\u{E9}.PDF"])
+        for name in ["x.zzqq", ".bashrc", "trailing.", "noext", "a.8f3a9b2c4d5e6f7a8b9c"] {
+            XCTAssertTrue(names(index, "type:document").contains(name), name) // no declared type
+        }
+        XCTAssertEqual(Query.parse("type:").groups, [[.invalid("type:")]])
+
+        // Every record's kind through the same helpers, then each needle against it.
+        func kind(_ id: Int) -> String {
+            let r = index.records[id]
+            let bytes: [UInt8] = index.lowerNames.withUnsafeBufferPointer { lower in
+                let ext = FileKinds.extensionRange(lower, Int(r.lowerStart), Int(r.lowerLength))
+                    .map { String(decoding: UnsafeBufferPointer(rebasing: lower[$0]), as: UTF8.self) } ?? ""
+                return FileKinds.kindText(extension: ext, isDirectory: r.isDirectory)
+            }
+            return String(decoding: bytes, as: UTF8.self)
+        }
+        let live = index.records.indices.filter { !index.records[$0].isDeleted }
+        for needle in ["pdf", "folder", "document", "image", "movie", "text", "pdf*", "*e", "?older", "application"] {
+            let expected = Set(live.filter { id in
+                let k = kind(id)
+                return needle.contains("*") || needle.contains("?") ? fnmatch(needle, k, 0) == 0 : k.contains(needle)
+            }.map { Int32($0) })
+            XCTAssertEqual(Set(index.matchingIds(Query.parse("type:\(needle)"))), expected, needle)
+            XCTAssertEqual(Set(index.matchingIds(Query.parse("!type:\(needle)"))), Set(live.map { Int32($0) }).subtracting(expected), needle)
+        }
+        XCTAssertNotEqual(kind(Int(tool)), kind(Int(root))) // Tool.app has its own kind
+
+        // The cached kinds grow with the index.
+        index.add(ScannedEntry(name: "late.pdf", isDirectory: false, size: 1, modified: 0), parent: root)
+        XCTAssertEqual(names(index, "type:pdf"), ["late.pdf", "q1 report.pdf", "R\u{E9}sum\u{E9}.PDF"])
+    }
+
     func testGroups() {
         // makeIndex names: /data, Reports, q1 report.pdf, Q2 Report.docx, film, game1.mp4, notes.txt.
         let index = makeIndex()

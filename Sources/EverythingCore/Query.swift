@@ -32,6 +32,9 @@ public struct Query {
         /// `childcount:3`: a folder holding that many files and folders; `empty:` is `childcount:0`.
         /// Files never match.
         case childCount(Comparison, Int64, negated: Bool)
+        /// `type:pdf`: the kind as the system names it ("PDF document", "folder"; see FileKinds) holds
+        /// this lowercase text; `glob` = whole-kind wildcards.
+        case kind([UInt8], glob: Bool, negated: Bool)
         case filesOnly
         case foldersOnly
         /// Temp and generated files, and everything inside temp folders (see TempFiles).
@@ -48,7 +51,7 @@ public struct Query {
     /// Parses Everything-style syntax: `foo bar`, `"exact phrase"`, `a | b`, `!skip`, `*.pdf`,
     /// `ext:pdf;docx`, `path:Football`, `drive:Work`, `size:>1gb`, `dm:today`, `regex:^IMG_\d+`,
     /// `file:`, `folder:`; modifiers `case:Report`, `ww:report`, `wfn:notes.txt`, `startwith:q`,
-    /// `endwith:.txt`; `len:>200`; folders `parent:/Users/x`, `depth:2`, `childcount:>10`, `empty:`;
+    /// `endwith:.txt`; `len:>200`; `type:pdf`; folders `parent:/Users/x`, `depth:2`, `childcount:>10`, `empty:`;
     /// groups `<a b> | c`, `!<a b>`.
     public static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> Query {
         // An explicit stack, not recursion: `<<<<…` can't run deep.
@@ -194,6 +197,7 @@ public struct Query {
         case let .parent(p, n): return .parent(p, negated: !n)
         case let .depth(c, v, n): return .depth(c, v, negated: !n)
         case let .childCount(c, v, n): return .childCount(c, v, negated: !n)
+        case let .kind(b, g, n): return .kind(b, glob: g, negated: !n)
         case .filesOnly: return .foldersOnly
         case .foldersOnly: return .filesOnly
         case let .temp(n): return .temp(negated: !n)
@@ -294,6 +298,12 @@ public struct Query {
         if lower == "folder:" { return negated ? .filesOnly : .foldersOnly }
         if lower == "temp:" { return .temp(negated: negated) }
         if lower == "empty:" { return .childCount(.equal, 0, negated: negated) }
+        if lower.hasPrefix("type:") {
+            // As with name text: contains, or with wildcards the whole kind.
+            let value = String(lower.dropFirst(5))
+            if value.isEmpty { return .invalid(raw) }
+            return .kind(Array(value.utf8), glob: value.contains("*") || value.contains("?"), negated: negated)
+        }
         if let prefix = ["parent:", "infolder:"].first(where: { lower.hasPrefix($0) }) {
             let value = lower.dropFirst(prefix.count)
             // shortcut: absolute paths only; `~` and relative paths match nothing. Add `~` when asked.

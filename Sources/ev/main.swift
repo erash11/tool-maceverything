@@ -19,6 +19,7 @@ query syntax:
   dm:today  dm:yesterday  dm:thisweek  dm:>2026-10-01
   regex:^IMG_\\d+    file:  folder:
   parent:/Users/x   only items directly in that folder   depth:2  childcount:>10  empty:
+  type:pdf          the kind, as macOS names it ("PDF document", "folder")
 
 options:
   -n, --limit N     results to print (default 100, 0 = all)

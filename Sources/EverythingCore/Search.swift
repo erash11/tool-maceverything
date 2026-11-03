@@ -51,7 +51,7 @@ struct CompiledQuery {
         static let size: UInt8 = 5, modified: UInt8 = 6, files: UInt8 = 7, folders: UInt8 = 8
         static let temp: UInt8 = 9, never: UInt8 = 10, sizeRange: UInt8 = 11
         static let cased: UInt8 = 12, casedGlob: UInt8 = 13, word: UInt8 = 14, length: UInt8 = 15
-        static let parent: UInt8 = 16, depth: UInt8 = 17, childCount: UInt8 = 18
+        static let parent: UInt8 = 16, depth: UInt8 = 17, childCount: UInt8 = 18, kind: UInt8 = 19
     }
 
     var terms: [Term] = []
@@ -81,6 +81,27 @@ struct CompiledQuery {
     private var parentIndex: [[UInt8]: Int] = [:]
     /// The folders each parent: path names, sorted; a term reads `length` ids from `start`.
     var parentIds: [Int32] = []
+    /// Distinct type: needles as (offset in `bytes`, length, glob); a type: term's `b` indexes this.
+    var kindNeedles: [(start: Int, length: Int, glob: Bool)] = []
+    private var kindIndex: [[UInt8]: Int] = [:] // needle bytes + [1 if glob]
+
+    /// For each type: needle, one byte per kind: 1 when the kind's text matches. Needle k's row
+    /// starts at k * table.count.
+    func kindMatches(_ table: KindTable) -> [UInt8] {
+        var out = [UInt8](repeating: 0, count: kindNeedles.count * table.count)
+        bytes.withUnsafeBufferPointer { q in
+        table.bytes.withUnsafeBufferPointer { kinds in
+            for (k, needle) in kindNeedles.enumerated() {
+                for i in 0..<table.count {
+                    let hit = needle.glob
+                        ? globBytes(kinds, table.start[i], table.length[i], q, needle.start, needle.length)
+                        : containsBytes(kinds, table.start[i], table.length[i], q, needle.start, needle.length)
+                    if hit { out[k * table.count + i] = 1 }
+                }
+            }
+        }}
+        return out
+    }
 
     init(_ query: Query) {
         for group in query.groups {
@@ -216,6 +237,16 @@ struct CompiledQuery {
         case let .childCount(cmp, n, neg):
             t.kind = Kind.childCount; t.negated = neg; t.cmp = CompiledQuery.cmpCode(cmp); t.a = n
             hasChildCount = true
+        case let .kind(n, glob, neg):
+            t.kind = Kind.kind; t.negated = neg
+            let key = n + [glob ? 1 : 0]
+            if let k = kindIndex[key] {
+                t.b = Int64(k)
+            } else {
+                t.b = Int64(kindNeedles.count)
+                kindIndex[key] = kindNeedles.count
+                kindNeedles.append((addBytes(n), n.count, glob))
+            }
         case .filesOnly:
             t.kind = Kind.files
         case .foldersOnly:
@@ -354,7 +385,12 @@ extension FileIndex {
         // Built once per search and shared by every depth: or childcount: term in it.
         let depth = compiled.hasDepth ? depths() : []
         let childCount = compiled.hasChildCount ? childCounts(rootsIn: rootsIn) : []
+        // type: reads each record's kind, then one byte per (needle, kind) says whether it matches.
+        let kinds = compiled.kindNeedles.isEmpty ? KindTable() : kindTable()
+        let kindHits = compiled.kindNeedles.isEmpty ? [] : compiled.kindMatches(kinds)
 
+        kinds.ids.withUnsafeBufferPointer { kindIds in
+        kindHits.withUnsafeBufferPointer { kindHits in
         compiled.parentIds.withUnsafeBufferPointer { parentIds in
         depth.withUnsafeBufferPointer { depths in
         childCount.withUnsafeBufferPointer { childCounts in
@@ -379,7 +415,8 @@ extension FileIndex {
                                    slotStart: slotStart, slotLength: slotLength,
                                    groupStart: groupStart, groupCount: groupCount,
                                    regexes: compiled.regexes, pathViews: pathViews, temp: tempMask,
-                                   parentIds: parentIds, depths: depths, childCounts: childCounts)
+                                   parentIds: parentIds, depths: depths, childCounts: childCounts,
+                                   kindIds: kindIds, kindHits: kindHits, kindCount: kinds.count)
             DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
                 let lo = chunk * chunkSize
                 let hi = min(lo + chunkSize, count)
@@ -406,7 +443,7 @@ extension FileIndex {
             }
             }
             withExtendedLifetime(tables) {}
-        }}}}}}}}}}}}}}
+        }}}}}}}}}}}}}}}}
         return partial.flatMap { $0 }
     }
 
@@ -534,6 +571,10 @@ struct MatchContext {
     /// depths() and childCounts() for queries that use them, else empty.
     let depths: UnsafeBufferPointer<Int32>
     let childCounts: UnsafeBufferPointer<Int32>
+    /// KindTable.ids and CompiledQuery.kindMatches for queries with type:, else empty.
+    let kindIds: UnsafeBufferPointer<Int32>
+    let kindHits: UnsafeBufferPointer<UInt8>
+    let kindCount: Int
 
     /// Whether the sorted ids parentIds[start..<start + n] hold `id`.
     @inline(__always)
@@ -659,6 +700,8 @@ struct MatchContext {
                     hit = compare(Int64(depths[id]), t.cmp, t.a)
                 case CompiledQuery.Kind.childCount:
                     hit = r.flags & 1 != 0 && compare(Int64(childCounts[id]), t.cmp, t.a)
+                case CompiledQuery.Kind.kind:
+                    hit = kindHits[Int(t.b) * kindCount + Int(kindIds[id])] != 0
                 default:
                     hit = r.flags & 1 != 0
                 }
