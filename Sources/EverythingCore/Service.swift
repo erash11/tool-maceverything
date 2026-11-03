@@ -727,7 +727,8 @@ public final class IndexService {
         let started = Date()
         flush()
         let applied = appliedEventIds
-        sortOffLock()
+        // No sort here: FileIndex.save sorts its compacted copy off this queue when needed
+        // (a sort of 2.8M names held `work` for about 3 s).
         let snap: FileIndex = index.write { idx in
             for (root, id) in applied {
                 // Keep the volume id the records came from (set by the scan that listed them).
