@@ -66,8 +66,15 @@ enum FileKinds {
         return nil
     }
 
-    /// The kind text (lowercase, searchForm) for a folder or file with this extension ("" for none).
+    /// The kind text (lowercase, searchForm) for a folder or file with this extension ("" for none):
+    /// what type: matches and the Type sort orders by.
     static func kindText(extension ext: String, isDirectory: Bool) -> [UInt8] {
+        Array(FileIndex.searchForm(kindDisplay(extension: ext, isDirectory: isDirectory)).utf8)
+    }
+
+    /// The kind as the Type column shows it: the system's text with its first letter capitalized
+    /// ("PDF document", "Folder", "Document"). Lowercased, it is exactly kindText.
+    static func kindDisplay(extension ext: String, isDirectory: Bool) -> String {
         var text: String?
         if isDirectory {
             if !ext.isEmpty, let t = UTType(filenameExtension: ext, conformingTo: .directory), t.conforms(to: .package) {
@@ -77,7 +84,38 @@ enum FileKinds {
         } else if !ext.isEmpty, let t = UTType(filenameExtension: ext), !t.isDynamic {
             text = t.localizedDescription
         }
-        return Array(FileIndex.searchForm(text ?? "document").utf8)
+        let shown = text ?? "document"
+        return shown.prefix(1).uppercased() + shown.dropFirst()
+    }
+
+    /// The extension of a name (lowercase; "" for none), by extensionRange's rule.
+    static func extensionString(ofName name: String) -> String {
+        let lower = Array(FileIndex.searchForm(name).utf8)
+        return lower.withUnsafeBufferPointer { buf in
+            extensionRange(buf, 0, buf.count).map { String(decoding: UnsafeBufferPointer(rebasing: buf[$0]), as: UTF8.self) } ?? ""
+        }
+    }
+
+    /// The Type column's text for a result, the same kind the daemon's type: and Type sort use.
+    public static func kindName(ofName name: String, isDirectory: Bool) -> String {
+        kindDisplay(extension: extensionString(ofName: name), isDirectory: isDirectory)
+    }
+
+    /// The Extension column's text for a result: "" for folders and names without one, as the
+    /// Extension sort orders them (first).
+    public static func extensionName(ofName name: String, isDirectory: Bool) -> String {
+        isDirectory ? "" : extensionString(ofName: name)
+    }
+
+    /// The first 16 bytes of an extension packed big-endian, so comparing (high, low) as numbers is
+    /// comparing the bytes in order; no extension is (0, 0) and sorts first. (Key packs for hashing,
+    /// not order.)
+    static func orderedPack(_ lower: UnsafeBufferPointer<UInt8>, _ ext: Range<Int>) -> (UInt64, UInt64) {
+        var high: UInt64 = 0, low: UInt64 = 0
+        for (j, i) in ext.enumerated() where j < 16 {
+            if j < 8 { high |= UInt64(lower[i]) << (8 * (7 - j)) } else { low |= UInt64(lower[i]) << (8 * (15 - j)) }
+        }
+        return (high, low)
     }
 }
 

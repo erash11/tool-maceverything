@@ -401,7 +401,7 @@ struct SearchView: View {
                 TableColumn("Name", value: \.name) { nameCell($0) }
                     .customizationID("name")
                     .disabledCustomizationBehavior(.visibility)
-                TableColumn("Type") { typeCell($0) }
+                TableColumn("Type", value: \.kindName) { typeCell($0) }
                     .width(min: 80, ideal: 150, max: 260)
                     .customizationID("type")
                 TableColumn("Path", value: \.path) { folderCell($0) }
@@ -414,7 +414,7 @@ struct SearchView: View {
                     .width(min: 110, ideal: 140, max: 180)
                     .customizationID("modified")
                     .defaultVisibility(.hidden)
-                TableColumn("Extension") { hit in Text(Self.fileExtension(hit)) }
+                TableColumn("Extension", value: \.extensionName) { hit in Text(hit.extensionName) }
                     .width(min: 50, ideal: 70, max: 120)
                     .customizationID("extension")
                     .defaultVisibility(.hidden)
@@ -427,7 +427,7 @@ struct SearchView: View {
         } else {
             withBehavior(Table(model.hits, selection: $selection, sortOrder: $sortOrder) {
                 TableColumn("Name", value: \.name) { nameCell($0) }
-                TableColumn("Type") { typeCell($0) }
+                TableColumn("Type", value: \.kindName) { typeCell($0) }
                     .width(min: 80, ideal: 150, max: 260)
                 TableColumn("Path", value: \.path) { folderCell($0) }
                 TableColumn("Size", value: \.size) { sizeCell($0) }
@@ -439,7 +439,7 @@ struct SearchView: View {
     }
 
     private func typeCell(_ hit: SearchHit) -> some View {
-        Text(Self.kind(hit)).foregroundStyle(.secondary).lineLimit(1)
+        Text(hit.kindName).foregroundStyle(.secondary).lineLimit(1)
     }
 
     private func nameCell(_ hit: SearchHit) -> some View {
@@ -466,17 +466,6 @@ struct SearchView: View {
             .monospacedDigit()
     }
 
-    private static func fileExtension(_ hit: SearchHit) -> String {
-        hit.isDirectory ? "" : (hit.name as NSString).pathExtension.lowercased()
-    }
-
-    private static func kind(_ hit: SearchHit) -> String {
-        let ext = (hit.name as NSString).pathExtension
-        if hit.isDirectory { return ext.isEmpty ? "Folder" : (UTType(filenameExtension: ext)?.localizedDescription ?? "Folder") }
-        if ext.isEmpty { return "Document" }
-        return UTType(filenameExtension: ext)?.localizedDescription ?? ext.uppercased() + " file"
-    }
-
     /// Sorting from the headers and the row menu, shared by both tables.
     private func withBehavior<T: View>(_ table: T) -> some View {
         table
@@ -492,6 +481,10 @@ struct SearchView: View {
                     key = .size
                 } else if column == \SearchHit.modified as PartialKeyPath<SearchHit> {
                     key = .modified
+                } else if column == \SearchHit.kindName as PartialKeyPath<SearchHit> {
+                    key = .type
+                } else if column == \SearchHit.extensionName as PartialKeyPath<SearchHit> {
+                    key = .ext
                 } else {
                     key = .name
                 }
@@ -691,4 +684,11 @@ struct LocationsView: View {
         .padding(14)
         .frame(minWidth: 520, minHeight: 300)
     }
+}
+
+/// The Type and Extension columns' text, from the same helpers the daemon sorts by, so a column
+/// sorted by the daemon reads in order.
+extension SearchHit {
+    var kindName: String { FileKinds.kindName(ofName: name, isDirectory: isDirectory) }
+    var extensionName: String { FileKinds.extensionName(ofName: name, isDirectory: isDirectory) }
 }
