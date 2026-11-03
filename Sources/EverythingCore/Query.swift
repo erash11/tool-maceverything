@@ -111,9 +111,11 @@ public struct Query {
     static let maxDistinctRegexes = 16
     static let maxDistinctPaths = 16
 
-    /// The most tests one record may need: each term is one, an `ext:` term one per extension. An
-    /// `ext:` list repeated by `< >` expansion is tested again in every group it lands in.
-    static let maxTestsPerRecord = 16_384
+    /// The most tests one record may need: each term is one, an `ext:` term one per extension (an
+    /// `ext:` list repeated by `< >` expansion is tested again in every group it lands in). Measured on
+    /// 2.85M entries under load: about 13 ms per name test and 1 ms per extension, so 256 keeps the
+    /// worst search to a few seconds. The window's type filter uses up to ~70 (Document).
+    static let maxTestsPerRecord = 256
 
     static func withinScanLimits(_ groups: [[Term]]) -> Bool {
         var regexes = Set<String>(), paths = Set<[UInt8]>()

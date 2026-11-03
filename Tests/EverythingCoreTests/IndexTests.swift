@@ -274,8 +274,9 @@ final class IndexTests: XCTestCase {
 
     func testGroupLimits() {
         let index = makeIndex()
+        let eight = "<a b c d e f g h>"
+        XCTAssertEqual(Query.parse(eight + "|" + eight).groups.count, 64)
         let sixteen = "<a b c d e f g h i j k l m n o p>"
-        XCTAssertEqual(Query.parse(sixteen + "|" + sixteen).groups.count, 256)
         let tooBig = Query.parse([sixteen, sixteen, sixteen].joined(separator: "|"))
         XCTAssertEqual(tooBig.groups.count, 1)
         XCTAssertEqual(index.search(tooBig).total, 0)
@@ -283,9 +284,10 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(index.search(Query.parse(String(repeating: "<", count: 33) + "report")).total, 0)
         XCTAssertEqual(index.search(Query.parse(String(repeating: "!<", count: 50_000) + "report")).total, 0)
         XCTAssertEqual(index.search(Query.parse(String(repeating: "<a>|", count: 50_000) + "report")).total, 0)
+        func zz(_ n: Int) -> String { Array(repeating: "zz", count: n).joined(separator: " ") }
         // A regex repeated by the expansion is compiled once; distinct regexes and paths are capped.
-        let repeated = Query.parse("<regex:^q >|<" + Array(repeating: "zz", count: 1000).joined(separator: " ") + ">")
-        XCTAssertEqual(repeated.groups.count, 1000)
+        let repeated = Query.parse("<regex:^q >|<" + zz(100) + ">")
+        XCTAssertEqual(repeated.groups.count, 100)
         XCTAssertEqual(CompiledQuery(repeated).regexes.count, 1)
         XCTAssertEqual(index.search(repeated).total, 2) // q1 report.pdf, Q2 Report.docx
         // " | " with spaces: inside a regex: word "|" is alternation.
@@ -298,30 +300,37 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(Query.parse(sixteenPaths + "|p17/").groups, [[.invalid(sixteenPaths + "|p17/")]])
         // A long needle repeated by the expansion is stored once.
         let long = String(repeating: "y", count: 10_000)
-        let spread = Query.parse("<" + long + " q>|<" + Array(repeating: "zz", count: 1000).joined(separator: " ") + ">")
-        XCTAssertEqual(spread.groups.count, 2000)
+        let spread = Query.parse("<" + long + " q>|<" + zz(60) + ">")
+        XCTAssertEqual(spread.groups.count, 120)
         XCTAssertLessThan(CompiledQuery(spread).bytes.count, 10_100)
-        // A long ext: list repeated by the expansion shares its slots.
-        let thousandZz = Array(repeating: "zz", count: 1000).joined(separator: " ")
+        // A long ext: list repeated by the expansion shares its slots...
         let exts = "ext:" + (1...10).map { "e\($0)" }.joined(separator: ";") + ";mp4"
-        let manyExts = Query.parse("<" + exts + " q>|<" + thousandZz + ">")
-        XCTAssertEqual(manyExts.groups.count, 2000)
+        let manyExts = Query.parse("<" + exts + " q>|<" + zz(18) + ">") // 18 × 12 + 18 × 2 = 252 tests
+        XCTAssertEqual(manyExts.groups.count, 36)
         XCTAssertEqual(CompiledQuery(manyExts).slotStart.count, 11)
         XCTAssertEqual(index.search(manyExts).total, 0)
-        // But each copy is tested per record, so a long list repeated many times matches nothing.
-        let longExts = "ext:" + (1...2000).map { "e\($0)" }.joined(separator: ";")
-        let tooManyTests = "<" + longExts + " q>|<" + thousandZz + ">"
+        // ...but each copy is tested per record, so past 256 tests per record nothing matches.
+        let tooManyTests = "<" + exts + " q>|<" + zz(19) + ">" // 266 tests
         XCTAssertEqual(Query.parse(tooManyTests).groups, [[.invalid(tooManyTests)]])
-        XCTAssertNotEqual(Query.parse(longExts).groups, [[.invalid(longExts)]]) // once is fine
+        let ext256 = "ext:" + (1...256).map { "e\($0)" }.joined(separator: ";")
+        XCTAssertNotEqual(Query.parse(ext256).groups, [[.invalid(ext256)]])
+        let ext257 = ext256 + ";e257"
+        XCTAssertEqual(Query.parse(ext257).groups, [[.invalid(ext257)]])
+        let or257 = (1...257).map { "w\($0)" }.joined(separator: "|")
+        XCTAssertEqual(Query.parse(or257).groups, [[.invalid(or257)]])
         // The limits hold for queries ANDed after parsing too (the search window adds its scope).
         let filmPaths = Query.parse((["film/"] + (1...15).map { "p\($0)/" }).joined(separator: "|"))
         let dataPaths = Query.parse((["data/"] + (1...15).map { "r\($0)/" }).joined(separator: "|"))
         XCTAssertEqual(index.search(filmPaths).total, 2)
         XCTAssertEqual(index.search(dataPaths).total, 6)
         XCTAssertEqual(index.search(filmPaths.and(dataPaths)).total, 0)
-        // More words than the term cap match nothing, before any is read; at the cap is fine.
-        XCTAssertEqual(index.search(Query.parse(Array(repeating: "zz", count: 4097).joined(separator: " "))).total, 0)
-        XCTAssertEqual(Query.parse(Array(repeating: "zz", count: 4096).joined(separator: " ")).groups.count, 4096)
+        let ext255txt = Query.parse("ext:" + (1...255).map { "e\($0)" }.joined(separator: ";") + ";txt")
+        XCTAssertEqual(index.search(ext255txt).total, 1) // notes.txt; 256 tests
+        XCTAssertEqual(index.search(Query.parse("notes").and(ext255txt)).total, 0) // 257 tests in all
+        // More words than the term cap match nothing, before any is read; at the test budget is fine.
+        XCTAssertEqual(index.search(Query.parse(zz(4097))).total, 0)
+        XCTAssertEqual(Query.parse(zz(256)).groups.count, 256)
+        XCTAssertEqual(Query.parse(zz(257)).groups, [[.invalid(zz(257))]])
         // Long words full of ">" or "|" stay cheap: each check reads only the word's first characters.
         let started = Date()
         _ = Query.parse("<regex:" + String(repeating: ">", count: 60_000))
