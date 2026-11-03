@@ -530,11 +530,12 @@ struct SearchView: View {
             // files (paste them in Finder), Cmd+Shift+C (Everything) or Cmd+Option+C (Finder) their
             // paths as text, Cmd+Delete moves them to the Trash, Cmd+Return shows them in Finder.
             if Self.listHasKeys(event.window) {
-                let c = UInt16(kVK_ANSI_C)
+                // C by the character it types (any keyboard layout); Delete and Return by key.
+                let isC = event.charactersIgnoringModifiers?.lowercased() == "c"
                 let action: ((Set<String>) -> Void)?
                 switch (event.keyCode, modifiers) {
-                case (c, [.command]): action = copyFiles
-                case (c, [.command, .shift]), (c, [.command, .option]): action = copy
+                case (_, [.command]) where isC: action = copyFiles
+                case (_, [.command, .shift]) where isC, (_, [.command, .option]) where isC: action = copy
                 case (UInt16(kVK_Delete), [.command]): action = moveToTrash
                 case (UInt16(kVK_Return), [.command]): action = { open($0, reveal: true) }
                 default: action = nil
