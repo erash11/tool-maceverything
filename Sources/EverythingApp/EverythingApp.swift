@@ -434,6 +434,8 @@ struct SearchView: View {
                     .width(min: 60, ideal: 80, max: 120)
                 TableColumn("Date Modified", value: \.modified) { modifiedCell($0) }
                     .width(min: 110, ideal: 140, max: 180)
+                TableColumn("Extension", value: \.extensionName) { hit in Text(hit.extensionName) }
+                    .width(min: 50, ideal: 70, max: 120)
             })
         }
     }
