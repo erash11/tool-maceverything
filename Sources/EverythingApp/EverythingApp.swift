@@ -430,7 +430,7 @@ struct SearchView: View {
                 .customizationID("fullpath")
                 .defaultVisibility(.hidden)
             } rows: {
-                ForEach(model.hits) { hit in TableRow(hit).itemProvider { Self.dragItem(hit) } }
+                ForEach(model.hits) { hit in TableRow(hit).itemProvider { dragItem(hit) } }
             })
         } else {
             withBehavior(Table(of: SearchHit.self, selection: $selection, sortOrder: $sortOrder) {
@@ -445,7 +445,7 @@ struct SearchView: View {
                 TableColumn("Extension", value: \.extensionName) { hit in Text(hit.extensionName) }
                     .width(min: 50, ideal: 70, max: 120)
             } rows: {
-                ForEach(model.hits) { hit in TableRow(hit).itemProvider { Self.dragItem(hit) } }
+                ForEach(model.hits) { hit in TableRow(hit).itemProvider { dragItem(hit) } }
             })
         }
     }
@@ -453,8 +453,11 @@ struct SearchView: View {
     /// What a dragged row carries, as a Finder drag does (a file URL): drop it in Finder, Mail or
     /// any app that takes files; Finder's own rules apply (a move within one drive, a copy to
     /// another, Option to copy).
-    private static func dragItem(_ hit: SearchHit) -> NSItemProvider {
-        NSItemProvider(object: URL(fileURLWithPath: hit.path) as NSURL)
+    /// Nothing to drag while the rows are an earlier search's (as with every file action, see
+    /// act(on:_:)), checked when the drag starts.
+    private func dragItem(_ hit: SearchHit) -> NSItemProvider? {
+        guard model.hitsAreCurrent, model.hits.contains(where: { $0.path == hit.path }) else { return nil }
+        return NSItemProvider(object: URL(fileURLWithPath: hit.path) as NSURL)
     }
 
     private func typeCell(_ hit: SearchHit) -> some View {
