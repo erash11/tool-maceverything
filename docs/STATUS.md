@@ -2,6 +2,9 @@
 
 ## Current state
 **2026-11-03 (read first):**
+- MERGED #23: Ctrl+1 to Ctrl+6 sort (name, path, size, extension, type, date modified; the same
+  keys again flip), through the panel's key monitor setting the table's sortOrder. App installed
+  from CI run 41714483456 (main 405c9fa). Codex: 1 round, approved. Live check: Eric.
 - MERGED #22: sort by Type and Extension (daemon keys `type`, `extension`; app columns sortable;
   the Type and Extension columns now show the text the daemon sorts by, from public
   `FileKinds.kindName`/`extensionName`). Keys are worked out as the heap reads them (memory
@@ -152,7 +155,7 @@ The old Next #5 (delete codex branches, close #10) was already done.
 ## Next
 0. Next PARITY gaps (brief Codex with the existing bounds and that case-sensitive-volume edge
    cases past them are out of scope, or it runs 7+ rounds again, as #17 and #18 did):
-   Ctrl+1..6 sort shortcuts (in progress); an incremental
+   next from PARITY's top-10: gap 6 (file actions: rename, Trash, drag-out, copy files) or 7 (history); an incremental
    path-order merge if the ~0.2 s rebuild under churn shows up in use. Then the smaller items in the
    2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
 1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
