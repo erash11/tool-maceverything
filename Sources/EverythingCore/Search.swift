@@ -90,19 +90,24 @@ struct CompiledQuery {
         }
     }
 
-    /// Finds each parent: folder once (`folders` comes from the index) and points every parent:
-    /// term at its ids.
-    mutating func resolveParents(_ folders: ([UInt8]) -> [Int32]) {
-        var ranges: [(start: Int, count: Int)] = []
+    /// Finds each parent: folder once (`folders` and `rootsIn` come from the index) and points every
+    /// parent: term at its folder ids (`start`, `length`) and at the roots directly in those folders
+    /// (`a`, `b`).
+    mutating func resolveParents(_ folders: ([UInt8]) -> [Int32], rootsIn: [(root: Int32, folder: Int32)]) {
+        var ranges: [(start: Int, count: Int, rootStart: Int, rootCount: Int)] = []
         for path in parentPaths {
             let ids = folders(path).sorted()
-            ranges.append((parentIds.count, ids.count))
+            let rootIds = rootsIn.filter { ids.contains($0.folder) }.map(\.root).sorted()
+            ranges.append((parentIds.count, ids.count, parentIds.count + ids.count, rootIds.count))
             parentIds += ids
+            parentIds += rootIds
         }
         for k in terms.indices where terms[k].kind == Kind.parent {
             let range = ranges[Int(terms[k].b)]
             terms[k].start = range.start
             terms[k].length = range.count
+            terms[k].a = Int64(range.rootStart)
+            terms[k].b = Int64(range.rootCount)
         }
     }
 
@@ -335,7 +340,8 @@ extension FileIndex {
         var compiled = CompiledQuery(query)
         let count = records.count
         if count == 0 { return [] }
-        compiled.resolveParents(folders(atLowerPath:))
+        let rootsIn = compiled.parentPaths.isEmpty && !compiled.hasChildCount ? [] : rootsInFolders()
+        compiled.resolveParents(folders(atLowerPath:), rootsIn: rootsIn)
         let cores = ProcessInfo.processInfo.activeProcessorCount
         let chunkCount = max(1, min(cores * 4, (count + 16_383) / 16_384))
         let chunkSize = (count + chunkCount - 1) / chunkCount
@@ -343,7 +349,7 @@ extension FileIndex {
         let temp = compiled.hasTemp ? tempMask() : []
         // Built once per search and shared by every depth: or childcount: term in it.
         let depth = compiled.hasDepth ? depths() : []
-        let childCount = compiled.hasChildCount ? childCounts() : []
+        let childCount = compiled.hasChildCount ? childCounts(rootsIn: rootsIn) : []
 
         compiled.parentIds.withUnsafeBufferPointer { parentIds in
         depth.withUnsafeBufferPointer { depths in
@@ -409,10 +415,6 @@ extension FileIndex {
         let slash = UInt8(ascii: "/")
         var path = lowerPath[...]
         while path.count > 1 && path.last == slash { path = path.dropLast() }
-        func lowerName(_ id: Int32) -> ArraySlice<UInt8> {
-            let r = records[Int(id)]
-            return lowerNames[Int(r.lowerStart)..<Int(r.lowerStart) + Int(r.lowerLength)]
-        }
         var current: [Int32] = []
         var rootLength = 0
         for id in roots {
@@ -436,6 +438,30 @@ extension FileIndex {
         return current
     }
 
+    func lowerName(_ id: Int32) -> ArraySlice<UInt8> {
+        let r = records[Int(id)]
+        return lowerNames[Int(r.lowerStart)..<Int(r.lowerStart) + Int(r.lowerLength)]
+    }
+
+    /// Roots that sit directly in an indexed folder, as (root, folder): /Volumes/X in /Volumes,
+    /// which the walk of / records but doesn't enter. A root has no parent record, so parent: and
+    /// childcount: add these. Left out when the folder already lists a child of that name.
+    func rootsInFolders() -> [(root: Int32, folder: Int32)] {
+        let slash = UInt8(ascii: "/")
+        var out: [(root: Int32, folder: Int32)] = []
+        for id in roots {
+            let path = lowerName(id)
+            guard let cut = path.lastIndex(of: slash), cut + 1 < path.endIndex else { continue } // "/" itself
+            let leaf = path[(cut + 1)...]
+            let folderPath = cut == path.startIndex ? path[...cut] : path[..<cut]
+            for folder in folders(atLowerPath: Array(folderPath)) where folder != id {
+                if (children[folder] ?? []).contains(where: { lowerName($0).elementsEqual(leaf) }) { continue }
+                out.append((id, folder))
+            }
+        }
+        return out
+    }
+
     /// Per record, the folders above it in its path: `/` is 0, `/Users` 1, a root `/Volumes/X` 2 and
     /// `/Volumes/X/a` 3. Parents come before their children, so one pass in id order is enough.
     func depths() -> [Int32] {
@@ -451,11 +477,13 @@ extension FileIndex {
         return out
     }
 
-    /// Per record, how many live files and folders it holds (0 for files). `children` lists only
-    /// live ids, and a folder emptied by a rescan has no entry.
-    func childCounts() -> [Int32] {
+    /// Per record, how many live files and folders it holds (0 for files), roots in it included
+    /// (see rootsInFolders). `children` lists only live ids, and a folder emptied by a rescan has no
+    /// entry.
+    func childCounts(rootsIn: [(root: Int32, folder: Int32)]) -> [Int32] {
         var out = [Int32](repeating: 0, count: records.count)
         for (dir, kids) in children { out[Int(dir)] = Int32(clamping: kids.count) }
+        for (_, folder) in rootsIn { out[Int(folder)] &+= 1 }
         return out
     }
 }
@@ -599,7 +627,9 @@ struct MatchContext {
                 case CompiledQuery.Kind.length:
                     hit = compare(characterCount(lower, start, len), t.cmp, t.a)
                 case CompiledQuery.Kind.parent:
-                    hit = parentHolds(t.start, t.length, r.parent)
+                    // A root has no parent record: look for it among the roots in those folders.
+                    hit = r.parent >= 0 ? parentHolds(t.start, t.length, r.parent)
+                                        : parentHolds(Int(t.a), Int(t.b), Int32(id))
                 case CompiledQuery.Kind.depth:
                     hit = compare(Int64(depths[id]), t.cmp, t.a)
                 case CompiledQuery.Kind.childCount:

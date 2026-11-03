@@ -272,7 +272,8 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(names(index, "empty: | parent:/data/reports"), ["film", "Q2 Report.docx"])
 
         // Depth counts path parts, so a root like /Volumes/X starts at 2. The longest root wins, and
-        // a case-sensitive volume can hold Users and users: parent: finds both.
+        // a case-sensitive volume can hold Users and users: parent: finds both. The walk of / records
+        // Volumes without entering it; the root /Volumes/X counts as in it.
         let disk = FileIndex()
         let top = disk.addRoot("/")
         let upper = disk.add(ScannedEntry(name: "Users", isDirectory: true, size: 0, modified: 0), parent: top)
@@ -288,15 +289,30 @@ final class IndexTests: XCTestCase {
         disk.sortIfNeeded(force: true)
         XCTAssertEqual(names(disk, "depth:0"), ["/"])
         XCTAssertEqual(names(disk, "depth:2"), ["/Volumes/X", "a.txt", "b.txt"])
-        XCTAssertEqual(names(disk, "depth:3 | parent:/volumes"), ["a", "My Docs"])
+        XCTAssertEqual(names(disk, "depth:3 | parent:/volumes"), ["/Volumes/X", "a", "My Docs"])
+        XCTAssertEqual(names(disk, "parent:/Volumes/"), ["/Volumes/X"])
+        XCTAssertEqual(names(disk, "!parent:/volumes depth:2"), ["a.txt", "b.txt"])
         XCTAssertEqual(names(disk, "depth:4"), ["c.txt", "deep.txt"])
         XCTAssertEqual(names(disk, "parent:/"), ["Users", "users", "Volumes"])
         XCTAssertEqual(names(disk, "parent:/USERS"), ["a.txt", "b.txt"])
         XCTAssertEqual(names(disk, "parent:/Volumes/x"), ["a", "My Docs"])
         XCTAssertEqual(names(disk, "\"parent:/volumes/x/my docs\""), ["c.txt"])
         XCTAssertEqual(names(disk, "parent:/volumes/xy"), [])
-        XCTAssertEqual(names(disk, "childcount:1"), ["a", "My Docs", "Users", "users"])
-        XCTAssertEqual(names(disk, "empty:"), ["Volumes"])
+        XCTAssertEqual(names(disk, "childcount:1"), ["a", "My Docs", "Users", "users", "Volumes"])
+        XCTAssertEqual(names(disk, "empty:"), [])
+
+        // When the folder already lists a child of the root's name, the root isn't counted twice.
+        let twice = FileIndex()
+        let slash = twice.addRoot("/")
+        let volumes = twice.add(ScannedEntry(name: "Volumes", isDirectory: true, size: 0, modified: 0), parent: slash)
+        twice.add(ScannedEntry(name: "X", isDirectory: true, size: 0, modified: 0), parent: volumes)
+        twice.addRoot("/Volumes/X")
+        twice.addRoot("/elsewhere/Y") // its folder isn't indexed
+        twice.sortIfNeeded(force: true)
+        XCTAssertEqual(names(twice, "parent:/volumes"), ["X"])
+        XCTAssertEqual(names(twice, "childcount:1"), ["/", "Volumes"])
+        XCTAssertEqual(names(twice, "parent:/elsewhere"), [])
+        XCTAssertEqual(names(twice, "empty:"), ["/elsewhere/Y", "/Volumes/X", "X"])
 
         // After these filters, ">" compares inside a group, as after size:.
         XCTAssertEqual(Query.parse("<depth:>2>").groups, Query.parse("depth:>2").groups)

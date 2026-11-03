@@ -78,7 +78,7 @@ Source: [Search Modifiers](https://www.voidtools.com/support/everything/search_m
 | `attrib:` | Hidden, system, read-only… | **Missing**: flags hold only directory/deleted (FileIndex.swift:25) | `ev --count 'attrib:H'` = 0 |
 | `parent:` / `infolder:` | Direct children of a folder | **Have** (2026-11-03, PR #18): case ignored, trailing `/` ignored; absolute paths only (no `~`); `nosubfolders:` not added | `ev --count 'parent:/Users'` (3); `'parent:/'` = `'depth:1'` (22) |
 | `depth:` / `parents:` | Folder depth | **Have** (2026-11-03, PR #18): folders above it in its path (`/` = 0, `/Volumes/X` = 2), with comparisons | `ev --count 'depth:<=2'` (263) = 1 + 22 + 240 |
-| `child:`, `childcount:`, `empty:` | Folders by what they contain | **Partial** (2026-11-03, PR #18): `childcount:` and `empty:` work (folders only); `child:`, `childfilecount:`, `childfoldercount:` missing. A folder the scanner can't read counts as empty | `ev --count 'empty:'` (145,363); `'empty: \| !empty:'` = all |
+| `child:`, `childcount:`, `empty:` | Folders by what they contain | **Partial** (2026-11-03, PR #18): `childcount:` and `empty:` work (folders only); `child:`, `childfilecount:`, `childfoldercount:` missing. A folder the scanner can't read or skips (`/dev`) counts as empty; a root (`/Volumes/CRASHBOX`) counts as in its folder | `ev --count 'empty:'` (145,363); `'empty: \| !empty:'` = all |
 | `dupe:` (1.5) | Duplicate names, sizes, etc. | **Missing** | `ev --count 'dupe:'` = 0 |
 | `content:` | Search file text | **Missing** | `ev --count 'content:invoice'` |
 | `len:` | Name length | **Have** (2026-11-03): characters of the name, with comparisons | `ev --count 'len:>200'` (31); `'len:>1000'` = 0 |
