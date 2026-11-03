@@ -366,7 +366,9 @@ struct SearchView: View {
         }
         // $hits sends the new rows just before `hits` changes; by then the search is marked current.
         .onReceive(model.$hits) { hits in
-            if downPending && model.hitsAreCurrent { moveIntoResults(hits) }
+            guard downPending && model.hitsAreCurrent else { return }
+            // Only if the box still has the keys: a click, Tab or Escape since then cancels it.
+            if Self.searchBoxHasKeys(NSApp.keyWindow) { moveIntoResults(hits) } else { downPending = false }
         }
         .onChange(of: model.query) { _ in downPending = false }
         .onExitCommand { NSApp.keyWindow?.orderOut(nil) }
@@ -518,8 +520,7 @@ struct SearchView: View {
             // the panel's keys means the box has focus (read from AppKit: this runs outside the
             // view's body). The identifier keeps other panels (the folder chooser) out.
             guard event.keyCode == UInt16(kVK_DownArrow), modifiers.isEmpty,
-                  event.window?.identifier == SearchView.panelID,
-                  (event.window?.firstResponder as? NSTextView)?.delegate is NSTextField else { return event }
+                  Self.searchBoxHasKeys(event.window) else { return event }
             if model.hitsAreCurrent {
                 moveIntoResults(model.hits)
             } else {
@@ -529,10 +530,18 @@ struct SearchView: View {
         }
     }
 
+    /// Whether `window` is the search panel and a text field's editor (the search box: the
+    /// panel's only text field) holds its keys.
+    private static func searchBoxHasKeys(_ window: NSWindow?) -> Bool {
+        window?.identifier == panelID && (window?.firstResponder as? NSTextView)?.delegate is NSTextField
+    }
+
     private func moveIntoResults(_ hits: [SearchHit]) {
         downPending = false
         guard let first = hits.first else { return }
-        if !hits.contains(where: { selection.contains($0.path) }) { selection = [first.path] }
+        // Keep only selected rows that are still results; none left selects the first.
+        let kept = selection.intersection(hits.map(\.path))
+        selection = kept.isEmpty ? [first.path] : kept
         tableFocused = true
     }
 
