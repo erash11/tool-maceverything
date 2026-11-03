@@ -1,7 +1,30 @@
 # Status
 
 ## Current state
-**2026-11-02/03 parity work (read first):**
+**2026-11-03 (read first):**
+- MERGED: #13 (unreadable filter values match nothing), #12 (live-update stall fix + index save
+  off the update queue), #11 (CI builds the app). Installed from `main` 31721f0-equivalent code:
+  `~/.local/bin/everythingd` and `ev` (backups `*.pre-savefix-2026-11-03`), and the app from CI
+  run 41654434583 via `scripts/install-app-from-ci.sh` (old app zipped at
+  `~/Library/Application Support/MacEverything/MacEverything-app-2026-10-16.zip`). Login item kept.
+  Option-Space not checked (macOS blocks scripted key presses).
+- parity_check, 3 runs after the fix: every live-update check passed (incl. 5000 files at once).
+  Speed failed under load 30 to 40 on 6 cores (3 to 9 searches over 100 ms per run); idle medians
+  27 to 93 ms, same as 11-02. Detail on PR #12's last comment.
+- Save probe (`ev --save` while creating a file): file seen in 1.3 s during a save (was 18.1 s).
+- Drive trial FAILED: 5,119 "giving up" lines (4,808 in the 12:00 UTC hour, while another job
+  trashed Drive files via `gws`). Drive turned off: config.json renamed to
+  `~/Library/Application Support/MacEverything/config.json.drive-trial-2026-11-03` (rename back
+  to undo). 0 entries under `~/Library/CloudStorage` now.
+- Correction: the daemon's 30 s check only ADDS locations from config.json. Removing one needs a
+  restart: `launchctl kickstart -k gui/$(id -u)/com.erash11.maceverything.daemon`.
+- Open from Codex (rejected for now, reasons on PR #12): shutdown during a slow save waits for two
+  writes; a shutdown save can hold a partial walk (cursor stays behind, restart replays). Cheap
+  follow-up: `ExitTimeOut` in the launchd plist.
+- Seen: a whole-`/` re-list after many dropped events took 389 s in slices (was ~118 s in one go);
+  live changes still applied in 1 to 3 s meanwhile.
+
+**2026-11-02/03 parity work:**
 - `scripts/parity_check.py` (Codex-reviewed, 5 rounds) times live updates and searches on the
   real Mac. `docs/PARITY.md` scores parity with Everything: 36 have, 23 partial, 55 missing;
   top 10 gaps listed there. Worst: unreadable terms (`dm:lastweek`, `size:10mb..50mb`) silently
@@ -62,7 +85,10 @@ still fails to build (same SwiftUIMacros error; Command Line Tools now Swift 6.4
 The old Next #5 (delete codex branches, close #10) was already done.
 
 ## Next
-0. (2026-11-03, first) On a quiet Mac run `python3 -I /Users/kristinarash/DEV/Personal/MacEverything/scripts/parity_check.py` 3 times; if all show `0 failed`, merge PR #12 then #11 (`gh pr merge 12 -R erash11/MacEverything --merge`), then check the Drive trial (command in Current state). Then fix the top gaps in `docs/PARITY.md`.
+0. Next PARITY gaps: (a2) support the values people type: `dm:lastweek`/`thismonth`, `dm:2026`,
+   `..` ranges, `size:empty|tiny|...|huge`; (b) the 500-row cap (EverythingApp.swift:182);
+   (c) Down Arrow from the search box into the list. Then the smaller items in the
+   2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
 1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
    location; `SearchScope.choices` lists every ~/Library/CloudStorage folder today. Small change
    plus a test tweak.

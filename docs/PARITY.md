@@ -9,7 +9,7 @@ Everything features come from voidtools' own docs (1.4, plus 1.5 alpha where mar
 
 The 10 gaps most likely to make it feel broken for someone coming from Everything, worst first:
 
-1. **Search terms the parser can't read return everything.** Unparsed values are dropped, so `dm:lastweek`, `dm:7days`, `dm:2026`, `size:10mb..50mb` and `size:huge` each return all 2.59M entries, with no error.
+1. **Fixed 2026-11-03 (PR #13): they now match nothing.** Next step: support these values. Was: **Search terms the parser can't read return everything.** Unparsed values are dropped, so `dm:lastweek`, `dm:7days`, `dm:2026`, `size:10mb..50mb` and `size:huge` each return all 2.59M entries, with no error.
 2. **Functions and modifiers it doesn't know become literal text, so they return 0.** `case:`, `parent:`, `ww:`, `dc:`, `empty:`, `type:`, `image:` and `<…>` grouping return 0 results, with no error.
 3. **The type, arrow, Enter habit doesn't work.** Down Arrow doesn't move from the search box into the results. Enter opens the first hit alphabetically, not the one you open most.
 4. **The list stops at 500 rows.** The window asks the daemon for only 500 results. The status bar can say "1,452,260 objects", but scrolling ends at row 500.
