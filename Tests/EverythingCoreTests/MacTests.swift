@@ -121,6 +121,31 @@ final class MacTests: XCTestCase {
         XCTAssertNotNil(index.lookup(dir + "/a/b/two.PDF"), "an unreadable folder must not lose its entries")
     }
 
+    /// A walk below a folder that failed is still owed after the folder alone lists fine.
+    func testShallowListingDoesNotClearAFailedWalk() throws {
+        let index = FileIndex()
+        let root = index.addRoot(dir)
+        Scanner().scanTree(into: index, root: root, rootPath: dir)
+        let b = index.lookup(dir + "/a/b")!
+        let fm = FileManager.default
+        // A file where the folder was: listing fails with ENOTDIR, not "gone" or "denied".
+        try fm.moveItem(atPath: dir + "/a/b", toPath: dir + "/a/b-saved")
+        fm.createFile(atPath: dir + "/a/b", contents: nil, attributes: [.posixPermissions: 0o755])
+        var queue: [Scanner.PendingFolder] = [(dir + "/a/b", b, false), (dir + "/a/b", b, true)]
+        var restored = false
+        let failures = Scanner().refreshFailures(SharedIndex(index), queue: &queue, yield: {
+            if !restored { // after the failed walk, before the shallow listing
+                try? fm.removeItem(atPath: self.dir + "/a/b")
+                try? fm.moveItem(atPath: self.dir + "/a/b-saved", toPath: self.dir + "/a/b")
+                restored = true
+            }
+            return false
+        })
+        XCTAssertTrue(restored)
+        XCTAssertEqual(failures.map(\.path), [dir + "/a/b"])
+        XCTAssertEqual(failures.first?.recursive, true)
+    }
+
     func testRefreshStopsWhenCancelled() throws {
         let index = FileIndex()
         let root = index.addRoot(dir)
@@ -294,6 +319,18 @@ final class MacTests: XCTestCase {
         XCTAssertGreaterThan(service.foldersLeftToList, 0, "the walk of the root is still to come")
         service.sync()
         XCTAssertEqual(service.foldersLeftToList, 0)
+
+        // A folder just created counts as recently changed too: its own events may be the
+        // dropped ones (mkdir, then thousands of files).
+        try FileManager.default.createDirectory(atPath: dir + "/bulk", withIntermediateDirectories: true)
+        service.receive([event(dir + "/", id: before + 3)], root: dir)
+        service.sync() // lists dir, finds bulk new and lists it
+        FileManager.default.createFile(atPath: dir + "/bulk/in-new-folder.txt", contents: nil)
+        service.receive([event("/", dropped: true, id: before + 4)], root: dir)
+        service.flushSliceNow()
+        service.flushSliceNow() // the recently changed dir and bulk, in either order
+        XCTAssertEqual(service.index.read { $0.search(Query.parse("in-new-folder")).total }, 1)
+        XCTAssertGreaterThan(service.foldersLeftToList, 0, "the walk of the root is still to come")
     }
 
     func testOnlyNewRootsAreScannedOnLoad() throws {

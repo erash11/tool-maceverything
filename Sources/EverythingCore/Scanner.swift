@@ -293,11 +293,14 @@ public struct Scanner {
     /// `yield` returns true after a folder, it stops and leaves the rest in `queue`, so a long
     /// walk (a whole volume, after FSEvents dropped events) can let newer changes go first.
     /// At least one folder is listed per call. Cancelling empties `queue`. `handled` gets each
-    /// folder that did not fail, so the caller can forget an earlier failure of it.
+    /// folder that did not fail and whether everything below it is being walked too, so the
+    /// caller can forget an earlier failure of it that this listing covers. `discovered` gets
+    /// each new folder found by a listing that was not already walking everything below.
     public func refreshFailures(_ shared: SharedIndex, queue: inout [PendingFolder],
                                 cancelled: () -> Bool = { false },
                                 yield: () -> Bool = { false },
-                                handled: (String) -> Void = { _ in }) -> [RefreshFailure] {
+                                handled: (String, Bool) -> Void = { _, _ in },
+                                discovered: (String) -> Void = { _ in }) -> [RefreshFailure] {
         var failures: [RefreshFailure] = []
         while let (p, id, deep) = queue.popLast() {
             let failedBefore = failures.count
@@ -336,13 +339,15 @@ public struct Scanner {
                     let kidName = index.name(of: kid)
                     let kidPath = p == "/" ? "/" + kidName : p + "/" + kidName
                     if skips(kidPath, name: kidName) { continue }
+                    if !deep { discovered(kidPath) }
                     out.append((kidPath, kid, true))
                 }
                 return out
             }
             if failures.count == failedBefore {
-                if !failures.isEmpty { failures.removeAll { $0.path == p } }
-                handled(p)
+                // A listing of the folder alone does not cover a failed walk below it.
+                if !failures.isEmpty { failures.removeAll { $0.path == p && (deep || !$0.recursive) } }
+                handled(p, deep)
             }
             queue.append(contentsOf: next)
             if !queue.isEmpty && yield() { break }

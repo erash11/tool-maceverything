@@ -457,11 +457,18 @@ public final class IndexService {
                 let failed = scanner.refreshFailures(index, queue: &walk,
                                                      cancelled: { self.locked { self._replacing } },
                                                      yield: { !drain && Date() >= end },
-                                                     handled: { path in
-                                                         // Listed fine: an earlier failure is over.
-                                                         self.walkFailures[path] = nil
-                                                         self.retries[path] = nil
-                                                     })
+                                                     handled: { path, deep in
+                                                         // Listed fine: an earlier failure it covers
+                                                         // is over (a shallow listing does not
+                                                         // cover a failed walk below the folder).
+                                                         if deep || self.walkFailures[path]?.recursive != true {
+                                                             self.walkFailures[path] = nil
+                                                             self.retries[path] = nil
+                                                         }
+                                                     },
+                                                     // A new folder is where a bulk change most
+                                                     // likely goes on (mkdir, then 5000 files).
+                                                     discovered: { self.recentlyChanged[$0] = Date() })
                 for f in failed {
                     var latest = f
                     latest.recursive = f.recursive || (walkFailures[f.path]?.recursive ?? false)
