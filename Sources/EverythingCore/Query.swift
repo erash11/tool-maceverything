@@ -63,7 +63,13 @@ public struct Query {
             let frame = stack.removeLast()
             if let node = frame.node { stack[stack.count - 1].add(node) }
         }
-        for token in tokenize(text) {
+        let tokens = tokenize(text)
+        // Every word is at least one term, so past maxExpandedTerms words the query can't fit:
+        // stop before reading any of them (each regex: word compiles a regex to check it).
+        var words = 0
+        for case .word(_) in tokens { words += 1 }
+        if words > maxExpandedTerms { return Query(groups: [[.invalid(text)]]) }
+        for token in tokens {
             switch token {
             case .or:
                 stack[stack.count - 1].joinNext = !stack[stack.count - 1].groups.isEmpty

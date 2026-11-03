@@ -82,11 +82,16 @@ struct CompiledQuery {
         }
     }
 
+    /// Adds `b` once: a needle repeated by `< >` expansion reuses its first copy, so `bytes` stays
+    /// no bigger than the distinct needles.
     private mutating func addBytes(_ b: [UInt8]) -> Int {
+        if let start = byteOffsets[b] { return start }
         let start = bytes.count
         bytes.append(contentsOf: b)
+        byteOffsets[b] = start
         return start
     }
+    private var byteOffsets: [[UInt8]: Int] = [:]
 
     private static func cmpCode(_ c: Query.Comparison) -> UInt8 {
         switch c {

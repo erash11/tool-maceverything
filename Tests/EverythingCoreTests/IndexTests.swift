@@ -288,6 +288,14 @@ final class IndexTests: XCTestCase {
         let sixteenPaths = (1...16).map { "p\($0)/" }.joined(separator: "|")
         XCTAssertNotEqual(Query.parse(sixteenPaths).groups, [[.invalid(sixteenPaths)]])
         XCTAssertEqual(Query.parse(sixteenPaths + "|p17/").groups, [[.invalid(sixteenPaths + "|p17/")]])
+        // A long needle repeated by the expansion is stored once.
+        let long = String(repeating: "y", count: 10_000)
+        let spread = Query.parse("<" + long + " q>|<" + Array(repeating: "zz", count: 1000).joined(separator: " ") + ">")
+        XCTAssertEqual(spread.groups.count, 2000)
+        XCTAssertLessThan(CompiledQuery(spread).bytes.count, 10_100)
+        // More words than the term cap match nothing, before any is read; at the cap is fine.
+        XCTAssertEqual(index.search(Query.parse(Array(repeating: "zz", count: 4097).joined(separator: " "))).total, 0)
+        XCTAssertEqual(Query.parse(Array(repeating: "zz", count: 4096).joined(separator: " ")).groups.count, 4096)
         // A long regex word full of ">" stays cheap (only its first characters are read).
         _ = Query.parse("<regex:" + String(repeating: ">", count: 60_000))
     }
