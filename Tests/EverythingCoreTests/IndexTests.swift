@@ -265,6 +265,10 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(dm("dm:>last7days"), ["future", "past", "tomorrow"])
         XCTAssertEqual(dm("dm:>=last7days"), ["future", "past", "tomorrow"])
         XCTAssertEqual(dm("dm:<=last7days"), ["old"])
+        // A rolling window can't be a range endpoint.
+        for q in ["dm:2026..last7days", "dm:>2026..last7days", "dm:last7days..2026", "dm:<=past2weeks..today"] {
+            XCTAssertEqual(Query.parse(q, now: now, calendar: cal).groups, [[.invalid(q)]], q)
+        }
         XCTAssertEqual(dm("dm:today"), ["past"]) // calendar days still end at midnight
     }
 

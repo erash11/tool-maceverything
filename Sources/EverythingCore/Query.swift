@@ -197,7 +197,9 @@ public struct Query {
         guard s.contains("..") else { return parseOneDay(s, now: now, calendar: calendar) }
         // Exactly one "..": no recursion, so a long chain of them can't run deep.
         let ends = s.components(separatedBy: "..")
+        // A rolling window has no end, so it can't be a range endpoint ("2026..last7days").
         guard ends.count == 2,
+              !ends.contains(where: { parseRolling($0, now: now, today: calendar.startOfDay(for: now), calendar: calendar) != nil }),
               let (a, _) = parseOneDay(ends[0], now: now, calendar: calendar),
               let (_, b) = parseOneDay(ends[1], now: now, calendar: calendar),
               a < b else { return nil }
