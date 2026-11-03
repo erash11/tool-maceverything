@@ -2,6 +2,12 @@
 
 ## Current state
 **2026-11-03 (read first):**
+- MERGED #24 (gap 6, part A): in the results list, Cmd+C copies the files (paste in Finder),
+  Cmd+Shift+C / Cmd+Option+C copy the paths, Cmd+Delete moves to Trash (list refreshes 1.5 s
+  later), Cmd+Return shows in Finder; context menu gains Copy and Move to Trash. Every file
+  action takes only rows of the current search. App installed from CI run 41720026226 (main
+  625d487). Codex: 4 rounds, approved. Live check: Eric (test file
+  ~/Downloads/maceverything-trash-test.txt). Gap 6 part B next: rename (F2), drag-out.
 - MERGED #23: Ctrl+1 to Ctrl+6 sort (name, path, size, extension, type, date modified; the same
   keys again flip), through the panel's key monitor setting the table's sortOrder. App installed
   from CI run 41714483456 (main 405c9fa). Codex: 1 round, approved. Confirmed working by Eric.
@@ -155,7 +161,7 @@ The old Next #5 (delete codex branches, close #10) was already done.
 ## Next
 0. Next PARITY gaps (brief Codex with the existing bounds and that case-sensitive-volume edge
    cases past them are out of scope, or it runs 7+ rounds again, as #17 and #18 did):
-   next from PARITY's top-10: gap 6 (file actions: rename, Trash, drag-out, copy files) or 7 (history); an incremental
+   gap 6 part B (rename F2, drag-out to Finder), then gap 7 (search history, run counts); an incremental
    path-order merge if the ~0.2 s rebuild under churn shows up in use. Then the smaller items in the
    2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
 1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
