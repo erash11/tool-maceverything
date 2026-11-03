@@ -66,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             styleMask: [.titled, .closable, .resizable, .miniaturizable],
                             backing: .buffered, defer: false)
             p.title = "MacEverything"
+            p.identifier = SearchView.panelID
             p.isFloatingPanel = true
             p.level = .floating
             p.hidesOnDeactivate = false
@@ -190,6 +191,10 @@ final class SearchModel: ObservableObject {
         }
     }
 
+    /// Whether `hits` are the first page of the search the box, scope and filter now ask for (not
+    /// rows of an earlier one still waiting to be replaced).
+    var hitsAreCurrent: Bool { pagesGeneration == generation }
+
     func run() {
         generation += 1
         let gen = generation
@@ -294,6 +299,11 @@ struct SearchView: View {
     @State private var selection = Set<String>()
     @State private var sortOrder = [KeyPathComparator(\SearchHit.name)]
     @FocusState private var fieldFocused: Bool
+    /// The Down Arrow watcher (see watchDownArrow); removed when the view goes away.
+    @State private var keyMonitor: Any?
+    /// Down was pressed while the results were still those of an earlier search.
+    @State private var downPending = false
+    static let panelID = NSUserInterfaceItemIdentifier("MacEverything.search")
     /// Which columns are shown, their order and widths (right-click a header; drag to reorder).
     /// Defaults to Name | Type | Path, like Everything.
     @AppStorage("resultColumns.v2") private var columnsData = Data()
@@ -344,7 +354,26 @@ struct SearchView: View {
             .padding(.vertical, 6)
         }
         .frame(minWidth: 600, minHeight: 320)
-        .onAppear { fieldFocused = true }
+        .onAppear {
+            fieldFocused = true
+            watchDownArrow()
+        }
+        .onDisappear {
+            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+            keyMonitor = nil
+        }
+        // $hits sends the new rows just before `hits` changes; by then the search is marked current.
+        .onReceive(model.$hits) { hits in
+            guard downPending && model.hitsAreCurrent else { return }
+            // Only if the box still has the keys: a click, Tab or Escape since then cancels it.
+            if Self.searchBoxHasKeys(NSApp.keyWindow) { moveIntoResults(hits) } else { downPending = false }
+        }
+        .onChange(of: model.query) { _ in downPending = false }
+        // Leaving the box, or the panel losing the keys (hidden with Escape, another window), drops it.
+        .onChange(of: fieldFocused) { focused in if !focused { downPending = false } }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { note in
+            if (note.object as? NSWindow)?.identifier == Self.panelID { downPending = false }
+        }
         .onExitCommand { NSApp.keyWindow?.orderOut(nil) }
         .onCopyCommand {
             let paths = selection.isEmpty ? [] : Array(selection)
@@ -480,11 +509,66 @@ struct SearchView: View {
             }
     }
 
+    /// Down Arrow in the search box moves into the results, as in Everything: the first row is
+    /// selected (a selection still on screen is kept) and the list takes the keys, so the next
+    /// Down, Up and Return work there. A local key monitor runs before the text field sees the key
+    /// (SwiftUI's onKeyPress needs macOS 14). Other keys, and Down with a modifier, pass through.
+    /// While the rows are still an earlier search's, the move waits for the current ones (a new
+    /// keystroke in the box cancels it), so Return can't open a row that doesn't match.
+    private func watchDownArrow() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            // The search panel's only text field is the search box, so a text field's editor holding
+            // the panel's keys means the box has focus (read from AppKit: this runs outside the
+            // view's body). The identifier keeps other panels (the folder chooser) out.
+            guard event.keyCode == UInt16(kVK_DownArrow), modifiers.isEmpty,
+                  Self.searchBoxHasKeys(event.window) else { return event }
+            if model.hitsAreCurrent {
+                moveIntoResults(model.hits)
+            } else {
+                downPending = true
+            }
+            return nil
+        }
+    }
+
+    /// Whether `window` is the search panel and a text field's editor (the search box: the
+    /// panel's only text field) holds its keys.
+    private static func searchBoxHasKeys(_ window: NSWindow?) -> Bool {
+        window?.identifier == panelID && (window?.firstResponder as? NSTextView)?.delegate is NSTextField
+    }
+
+    private func moveIntoResults(_ hits: [SearchHit]) {
+        downPending = false
+        guard let first = hits.first, let window = NSApp.keyWindow, Self.searchBoxHasKeys(window),
+              let table = Self.tableView(in: window.contentView) else { return }
+        // Keep only selected rows that are still results; none left selects the first.
+        let kept = selection.intersection(hits.map(\.path))
+        selection = kept.isEmpty ? [first.path] : kept
+        // AppKit, not @FocusState: a focus flag SwiftUI still holds from an earlier visit to the
+        // list (focus then moved by a click) makes setting it again do nothing (seen live).
+        window.makeFirstResponder(table)
+    }
+
+    /// The results list's AppKit table (SwiftUI's Table is an NSTableView; the panel has one).
+    private static func tableView(in view: NSView?) -> NSTableView? {
+        guard let view else { return nil }
+        if let table = view as? NSTableView { return table }
+        for sub in view.subviews { if let table = tableView(in: sub) { return table } }
+        return nil
+    }
+
+    /// Return in the search box: the selected rows that are current results, else the first row.
+    /// Nothing while the rows are still an earlier search's, so a row that doesn't match what was
+    /// typed is never opened.
     private func openSelection(reveal: Bool) {
-        if selection.isEmpty, let first = model.hits.first {
+        guard model.hitsAreCurrent else { return }
+        let current = selection.intersection(model.hits.map(\.path))
+        if !current.isEmpty {
+            open(current, reveal: reveal)
+        } else if let first = model.hits.first {
             open([first.path], reveal: reveal)
-        } else {
-            open(selection, reveal: reveal)
         }
     }
 
