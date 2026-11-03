@@ -150,13 +150,14 @@ public struct Query {
             guard bytes.isFinite, bytes >= 0, bytes < 9.2e18 else { return nil }
             return Int64(bytes)
         }
-        return Int64(s)
+        guard let bytes = Int64(s), bytes >= 0 else { return nil } // no negative sizes, as with units
+        return bytes
     }
 
     /// Everything's size names, as inclusive byte ranges.
     static let sizeNames: [String: (Int64, Int64)] = [
         "empty": (0, 0),
-        "tiny": (0, 10 << 10),
+        "tiny": (1, 10 << 10), // empty files are `empty`, not tiny
         "small": ((10 << 10) + 1, 100 << 10),
         "medium": ((100 << 10) + 1, 1 << 20),
         "large": ((1 << 20) + 1, 16 << 20),
@@ -181,13 +182,19 @@ public struct Query {
     /// counts today as one); `2026`, `2026-10`, `2026-10-15`; and `a..b`, from the start of a to
     /// the end of b.
     static func parseDay(_ s: String, now: Date, calendar: Calendar) -> (Int64, Int64)? {
+        guard s.contains("..") else { return parseOneDay(s, now: now, calendar: calendar) }
+        // Exactly one "..": no recursion, so a long chain of them can't run deep.
+        let ends = s.components(separatedBy: "..")
+        guard ends.count == 2,
+              let (a, _) = parseOneDay(ends[0], now: now, calendar: calendar),
+              let (_, b) = parseOneDay(ends[1], now: now, calendar: calendar),
+              a < b else { return nil }
+        return (a, b)
+    }
+
+    /// One day, period or date (no range); see parseDay.
+    static func parseOneDay(_ s: String, now: Date, calendar: Calendar) -> (Int64, Int64)? {
         func secs(_ d: Date) -> Int64 { Int64(d.timeIntervalSince1970) }
-        if let dots = s.range(of: "..") {
-            guard let (a, _) = parseDay(String(s[..<dots.lowerBound]), now: now, calendar: calendar),
-                  let (_, b) = parseDay(String(s[dots.upperBound...]), now: now, calendar: calendar),
-                  a < b else { return nil }
-            return (a, b)
-        }
         let today = calendar.startOfDay(for: now)
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
         func period(_ unit: Calendar.Component, back: Int) -> (Int64, Int64)? {

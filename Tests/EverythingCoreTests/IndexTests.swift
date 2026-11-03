@@ -175,6 +175,21 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(names(index, "size:>=large"), ["game1.mp4", "q1 report.pdf"])
         XCTAssertEqual(names(index, "file: !size:tiny"), ["game1.mp4", "q1 report.pdf"])
         XCTAssertEqual(names(index, "size:tiny | size:gigantic"), ["game1.mp4", "notes.txt", "Q2 Report.docx"])
+
+        // Boundaries: empty is 0 bytes only, tiny is 1 byte to 10 KB.
+        let edge = FileIndex()
+        let root = edge.addRoot("/e")
+        for (name, size) in [("zero", Int64(0)), ("one", Int64(1)), ("tenk", Int64(10 << 10)), ("over", Int64((10 << 10) + 1))] {
+            edge.add(ScannedEntry(name: name, isDirectory: false, size: size, modified: 0), parent: root)
+        }
+        edge.sortIfNeeded(force: true)
+        XCTAssertEqual(names(edge, "size:empty"), ["zero"])
+        XCTAssertEqual(names(edge, "size:tiny"), ["one", "tenk"])
+        XCTAssertEqual(names(edge, "size:small"), ["over"])
+        // Negative sizes are unreadable, with or without a unit, also inside a range.
+        for q in ["size:-1", "size:-1..10", "size:-1b..10b", "size:>=-1..10", "!size:-1..10", "size:5..-1"] {
+            XCTAssertEqual(Query.parse(q).groups, [[.invalid(q)]], q)
+        }
     }
 
     func testDatePeriodsAndRanges() {
@@ -215,6 +230,10 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(dm(">lastmonth"), ["a", "b", "c", "f"])
         XCTAssertEqual(dm("<thisyear"), ["e"])
         XCTAssertEqual(dm("<=lastweek"), ["c", "d", "e"])
+        // One ".." only; a long chain is rejected without deep recursion.
+        XCTAssertEqual(dm("2026..2026..2026"), [])
+        let chain = "dm:" + Array(repeating: "2026", count: 50_000).joined(separator: "..")
+        XCTAssertEqual(Query.parse(chain).groups, [[.invalid(chain)]])
     }
 
     func testNegatedFilters() {
