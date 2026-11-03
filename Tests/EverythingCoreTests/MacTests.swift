@@ -131,7 +131,7 @@ final class MacTests: XCTestCase {
         // A file where the folder was: listing fails with ENOTDIR, not "gone" or "denied".
         try fm.moveItem(atPath: dir + "/a/b", toPath: dir + "/a/b-saved")
         fm.createFile(atPath: dir + "/a/b", contents: nil, attributes: [.posixPermissions: 0o755])
-        var queue: [Scanner.PendingFolder] = [(dir + "/a/b", b, false), (dir + "/a/b", b, true)]
+        var queue: [EverythingCore.Scanner.PendingFolder] = [(dir + "/a/b", b, false), (dir + "/a/b", b, true)]
         var restored = false
         var handled: [String] = []
         let failures = Scanner().refreshFailures(SharedIndex(index), queue: &queue, yield: {
@@ -144,7 +144,7 @@ final class MacTests: XCTestCase {
         }, handled: { path, _ in handled.append(path) })
         XCTAssertTrue(restored)
         XCTAssertFalse(handled.contains(dir + "/a/b"), "still owed a walk, so its retry count must stay")
-        XCTAssertEqual(failures.map(\.path), [dir + "/a/b"])
+        XCTAssertEqual(failures.map { $0.path }, [dir + "/a/b"])
         XCTAssertEqual(failures.first?.recursive, true)
     }
 
