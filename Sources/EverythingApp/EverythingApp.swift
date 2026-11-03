@@ -371,6 +371,11 @@ struct SearchView: View {
             if Self.searchBoxHasKeys(NSApp.keyWindow) { moveIntoResults(hits) } else { downPending = false }
         }
         .onChange(of: model.query) { _ in downPending = false }
+        // Leaving the box, or the panel losing the keys (hidden with Escape, another window), drops it.
+        .onChange(of: fieldFocused) { focused in if !focused { downPending = false } }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { note in
+            if (note.object as? NSWindow)?.identifier == Self.panelID { downPending = false }
+        }
         .onExitCommand { NSApp.keyWindow?.orderOut(nil) }
         .onCopyCommand {
             let paths = selection.isEmpty ? [] : Array(selection)
@@ -545,11 +550,16 @@ struct SearchView: View {
         tableFocused = true
     }
 
+    /// Return in the search box: the selected rows that are current results, else the first row.
+    /// Nothing while the rows are still an earlier search's, so a row that doesn't match what was
+    /// typed is never opened.
     private func openSelection(reveal: Bool) {
-        if selection.isEmpty, let first = model.hits.first {
+        guard model.hitsAreCurrent else { return }
+        let current = selection.intersection(model.hits.map(\.path))
+        if !current.isEmpty {
+            open(current, reveal: reveal)
+        } else if let first = model.hits.first {
             open([first.path], reveal: reveal)
-        } else {
-            open(selection, reveal: reveal)
         }
     }
 
