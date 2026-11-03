@@ -2,6 +2,13 @@
 
 ## Current state
 **2026-11-03 (read first):**
+- MERGED #20 (gap 5, was Next b2): fast Path/Size/Date sorts. Path: a cached path order (folder
+  first, then names: `/a/z` before `/a b`, a change from text order), rebuilt only when records
+  are added (~0.2 to 0.27 s; under file churn most first path sorts pay it), 8 B/record. Size and
+  date: heap of the rows asked for, (key, id) total order. Live through the daemon, `a` (1.6M
+  matches): path 266 ms first page, 30 ms next page (was 2.5 s and 2.3 s); size 33 ms (was
+  401); date 30 ms (was 232). Daemon 385.5 MB. Installed from `main` 8bc64a0 (backups
+  `*.pre-sorts-2026-11-03`). Codex: 1 round, approved.
 - MERGED #19: `type:` matches the kind as macOS names it (UTType description of the extension;
   `.app` and other packages their own kind; folders `folder`; no known extension `document`).
   Per-record kind cache like `tempMask()` (4 B/record; 7,147 extensions, 241 kinds; built once,
@@ -130,8 +137,8 @@ The old Next #5 (delete codex branches, close #10) was already done.
 ## Next
 0. Next PARITY gaps (brief Codex with the existing bounds and that case-sensitive-volume edge
    cases past them are out of scope, or it runs 7+ rounds again, as #17 and #18 did):
-   (b2) cache sorted ids per query in the daemon so
-   path/size/date pages are fast; (c) Down Arrow from the search box into the list. Then the smaller items in the
+   (c) Down Arrow from the search box into the list; sort by Type/Extension; an incremental
+   path-order merge if the ~0.2 s rebuild under churn shows up in use. Then the smaller items in the
    2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
 1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
    location; `SearchScope.choices` lists every ~/Library/CloudStorage folder today. Small change
