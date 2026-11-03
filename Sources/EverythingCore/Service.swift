@@ -633,6 +633,13 @@ public final class IndexService {
         if !returned.isEmpty, lifecycle.try() {
             for root in returned {
                 let since = Watcher.currentEventId(for: root)
+                // A different disk at the same path: forget the old disk's id. Saves made before
+                // the re-list below finishes then carry no state for this root (a load rescans
+                // it), and the one after it stamps the new disk's id with the new cursor.
+                let uuid = Watcher.volumeUUID(for: root) ?? ""
+                index.write { idx in
+                    if let saved = idx.volumeState[root], saved.volumeUUID != uuid { idx.volumeState[root] = nil }
+                }
                 startWatcher(root, since: since)
                 // Applied (and saved) only once the re-list below is done, like any change.
                 // Until then a save keeps the index file's own volume id and cursor for this
@@ -718,9 +725,11 @@ public final class IndexService {
                 // Keep the volume id the records came from (set by the scan that listed them).
                 // Asking the disk now could pair one disk's records with another disk mounted at
                 // the same path; a kept id that no longer matches only costs a rescan at load.
-                let uuid = idx.volumeState[root]?.volumeUUID ?? Watcher.volumeUUID(for: root) ?? ""
-                idx.volumeState[root] = .init(volumeUUID: uuid, lastEventId: id,
-                                              perDevice: idx.volumeState[root]?.perDevice)
+                // No stored id (a different disk came back, see maintenance): ask the disk, as a scan does.
+                let saved = idx.volumeState[root]
+                idx.volumeState[root] = .init(volumeUUID: saved?.volumeUUID ?? Watcher.volumeUUID(for: root) ?? "",
+                                              lastEventId: id,
+                                              perDevice: saved?.perDevice ?? Watcher(root: root) { _ in }.isPerDevice)
             }
             return idx.snapshot()
         }
