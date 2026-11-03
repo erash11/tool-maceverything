@@ -157,7 +157,8 @@ final class SearchModel: ObservableObject {
     /// The generation whose first page `pages` holds; paging waits until it equals `generation`,
     /// so rows of the previous search can't ask for a page of the new one.
     private var pagesGeneration = -1
-    private var timing = ""
+    /// The first page's search time; the count in the footer comes from the latest page.
+    private var milliseconds = 0.0
     private var pageError = ""
 
     init() {
@@ -221,7 +222,7 @@ final class SearchModel: ObservableObject {
                 if let first { self.pages.reset(with: first) } else { self.pages = ResultPages() }
                 self.pagesGeneration = gen
                 self.pageError = ""
-                self.timing = first == nil ? "" : text
+                self.milliseconds = first?.milliseconds ?? 0
                 self.hits = self.pages.hits
                 self.message = first == nil ? text : self.footer()
             }
@@ -269,7 +270,10 @@ final class SearchModel: ObservableObject {
     }
 
     private func footer() -> String {
-        (pages.hasMore ? timing + "  ·  showing \(pages.hits.count.formatted())" : timing) + pageError
+        var text = "\(pages.total.formatted()) objects  ·  \(String(format: "%.1f", milliseconds)) ms"
+        // Repeats are skipped, so loaded rows can differ from the total even when paging is done.
+        if pages.hits.count != pages.total { text += "  ·  showing \(pages.hits.count.formatted())" }
+        return text + pageError
     }
 }
 
