@@ -331,6 +331,7 @@ public final class IndexService {
             resetWalk() // its ids point into the old index
             appliedEventIds = fresh.volumeState.mapValues(\.lastEventId)
             index.replace(with: fresh)
+            dirty = true // lives on `work`
             locked { _replacing = false }
         }
         locked {
@@ -339,7 +340,6 @@ public final class IndexService {
             _scanningRoot = nil
             _ready = true
         }
-        dirty = true
         startWatchers(since: fresh.volumeState)
         work.async { self.saveInBackground() }
     }
@@ -675,8 +675,21 @@ public final class IndexService {
     /// Applies queued changes, then saves. Safe from any thread except `work`. Returns once the
     /// file is written, after any background save queued before it.
     public func save() throws {
-        guard let snap = work.sync(execute: { snapshotOnWork() }) else { return }
-        try saveQueue.sync { try write(snap) }
+        // The write is queued in the same `work` step that takes the snapshot, so writes land in
+        // snapshot order: an older snapshot can never overwrite a newer file.
+        let done = DispatchSemaphore(value: 0)
+        var failure: Error?
+        let queued: Bool = work.sync {
+            guard let snap = snapshotOnWork() else { return false }
+            saveQueue.async {
+                do { try self.write(snap) } catch { failure = error }
+                done.signal()
+            }
+            return true
+        }
+        guard queued else { return }
+        done.wait()
+        if let failure { throw failure }
     }
 
     /// Runs on `work`: snapshots now, writes on `saveQueue`. Skipped while one is in flight; the
@@ -702,7 +715,11 @@ public final class IndexService {
         sortOffLock()
         let snap: FileIndex = index.write { idx in
             for (root, id) in applied {
-                idx.volumeState[root] = .init(volumeUUID: Watcher.volumeUUID(for: root) ?? "", lastEventId: id,
+                // Keep the volume id the records came from (set by the scan that listed them).
+                // Asking the disk now could pair one disk's records with another disk mounted at
+                // the same path; a kept id that no longer matches only costs a rescan at load.
+                let uuid = idx.volumeState[root]?.volumeUUID ?? Watcher.volumeUUID(for: root) ?? ""
+                idx.volumeState[root] = .init(volumeUUID: uuid, lastEventId: id,
                                               perDevice: idx.volumeState[root]?.perDevice)
             }
             return idx.snapshot()
