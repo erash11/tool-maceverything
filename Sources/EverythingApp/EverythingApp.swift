@@ -191,17 +191,14 @@ final class SearchModel: ObservableObject {
         }
     }
 
-    /// Searches again after the app changed files (Move to Trash). File events reach the daemon
-    /// after a short delay, then `sync` applies everything queued, so the new search sees the change.
-    /// shortcut: a fixed 1 s wait for the event; ask the daemon to rescan the folders if that
-    /// ever proves too short.
+    /// Searches again after the app changed files (Move to Trash). The daemon applies a file event
+    /// about 0.5 s after it happens (0.3 s event latency, then a 0.2 s flush), so this waits 1.5 s.
+    /// Not `sync`: it drains an unfinished walk before it answers, which can take minutes, and
+    /// searches would queue behind it.
+    /// shortcut: a fixed wait; if the event is ever later, the trashed row stays until the next
+    /// search. Add a bounded "apply pending events" request to the daemon if that shows up.
     func refreshAfterChange() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            self.queue.async {
-                _ = try? IPC.send(IPCRequest(command: "sync"))
-                DispatchQueue.main.async { self.run() }
-            }
-        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.run() }
     }
 
     /// Whether `hits` are the first page of the search the box, scope and filter now ask for (not
