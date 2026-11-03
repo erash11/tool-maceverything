@@ -2,6 +2,11 @@
 
 ## Current state
 **2026-11-03 (read first):**
+- MERGED #14: the results list loads more rows as you scroll (first 500, then 2000 per page by
+  offset; `ResultPages` in EverythingCore). App installed from CI run 41660743834. Codex: 5
+  rounds, approved. Scrolling past row 500 NOT yet seen in the window. Page cost: name sort 39 to
+  89 ms; path sort 3.3 to 3.8 s per page (daemon re-sorts all matches; next fix candidate).
+- Option-Space confirmed working by Eric (2026-11-03).
 - MERGED: #13 (unreadable filter values match nothing), #12 (live-update stall fix + index save
   off the update queue), #11 (CI builds the app). Installed from `main` 31721f0-equivalent code:
   `~/.local/bin/everythingd` and `ev` (backups `*.pre-savefix-2026-11-03`), and the app from CI
@@ -86,8 +91,8 @@ The old Next #5 (delete codex branches, close #10) was already done.
 
 ## Next
 0. Next PARITY gaps: (a2) support the values people type: `dm:lastweek`/`thismonth`, `dm:2026`,
-   `..` ranges, `size:empty|tiny|...|huge`; (b) the 500-row cap (EverythingApp.swift:182);
-   (c) Down Arrow from the search box into the list. Then the smaller items in the
+   `..` ranges, `size:empty|tiny|...|huge`; (b2) cache sorted ids per query in the daemon so
+   path/size/date pages are fast; (c) Down Arrow from the search box into the list. Then the smaller items in the
    2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
 1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
    location; `SearchScope.choices` lists every ~/Library/CloudStorage folder today. Small change
