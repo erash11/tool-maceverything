@@ -149,6 +149,12 @@ final class SearchModel: ObservableObject {
     private static let scopeKey = "searchScope"
     private let queue = DispatchQueue(label: "MacEverything.app.search")
     private var generation = 0
+    /// Every row loaded so far for the current search; `hits` mirrors `pages.hits`.
+    private var pages = ResultPages()
+    /// The current search's request, reused with a new offset for each further page.
+    private var request = IPCRequest(command: "search")
+    private var loadingMore = false
+    private var timing = ""
 
     init() {
         refreshScopes()
@@ -179,16 +185,19 @@ final class SearchModel: ObservableObject {
     func run() {
         generation += 1
         let gen = generation
-        let request = IPCRequest(command: "search", query: query, limit: 500, sort: sort, descending: descending,
+        loadingMore = false
+        let request = IPCRequest(command: "search", query: query, limit: ResultPages.firstPage, sort: sort,
+                                 descending: descending,
                                  scope: [scope.query, filter.query, showTemp ? "" : "!temp:"]
                                      .filter { !$0.isEmpty }.joined(separator: " "))
+        self.request = request
         queue.async {
             let text: String
-            var newHits: [SearchHit] = []
+            var first: SearchResult?
             do {
                 let response = try IPC.send(request)
                 if let r = response.result {
-                    newHits = r.hits
+                    first = r
                     text = "\(r.total.formatted()) objects  ·  \(String(format: "%.1f", r.milliseconds)) ms"
                 } else {
                     text = response.error ?? "Search failed"
@@ -205,10 +214,39 @@ final class SearchModel: ObservableObject {
             }
             DispatchQueue.main.async {
                 guard gen == self.generation else { return }
-                self.hits = newHits
-                self.message = text
+                if let first { self.pages.reset(with: first) } else { self.pages = ResultPages() }
+                self.timing = first == nil ? "" : text
+                self.hits = self.pages.hits
+                self.message = first == nil ? text : self.footer()
             }
         }
+    }
+
+    /// Called as rows come on screen: near the end of what is loaded, fetch the next page, so the
+    /// list scrolls through every match instead of stopping at the first page.
+    func rowAppeared(_ hit: SearchHit) {
+        guard pages.hasMore, !loadingMore, pages.isNearEnd(hit.path) else { return }
+        loadingMore = true
+        let gen = generation
+        var next = request
+        next.offset = pages.nextOffset
+        next.limit = ResultPages.nextPage
+        queue.async {
+            let page = (try? IPC.send(next))?.result
+            DispatchQueue.main.async {
+                guard gen == self.generation else { return }
+                self.loadingMore = false
+                // A failed page leaves the list as it is; scrolling near the end tries again.
+                guard let page else { return }
+                self.pages.append(page)
+                self.hits = self.pages.hits
+                self.message = self.footer()
+            }
+        }
+    }
+
+    private func footer() -> String {
+        pages.hasMore ? timing + "  ·  showing \(pages.hits.count.formatted())" : timing
     }
 }
 
@@ -337,7 +375,9 @@ struct SearchView: View {
     }
 
     private func nameCell(_ hit: SearchHit) -> some View {
+        // The Name column is always shown, so its cells report which rows are on screen.
         Label(hit.name, systemImage: hit.isDirectory ? "folder" : "doc")
+            .onAppear { model.rowAppeared(hit) }
     }
 
     private func folderCell(_ hit: SearchHit) -> some View {
