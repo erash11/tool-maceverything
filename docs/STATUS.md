@@ -2,6 +2,14 @@
 
 ## Current state
 **2026-11-03 (read first):**
+- MERGED #17 (gap 2, part B): `< >` grouping (`<a b> | c`, `!<a b>`, nesting). Groups flatten to
+  the AND-of-ORs the matcher runs. Limits (past one, no results, no message): 32 deep, 4,096
+  expanded terms, 256 tests per record (an `ext:` counts each extension; measured: a 256-way OR
+  takes 2.5 s under load), 16 distinct `regex:`, 16 distinct `path:`; also checked in the scan,
+  so scope + filter count. Installed from `main` a5758c1 (backups `*.pre-groups-2026-11-03`).
+  Live: `<report 2026>|invoice` 457 = 290 + 167. Codex: 9 rounds (Eric raised the cap); last
+  REVISE (R18, wording only). Follow-ups: regex time limit (`^(a+)+$` has none; older than #17);
+  a refused query shows 0 results with no message (PARITY "Feedback on bad syntax").
 - MERGED #16 (gap 2, part A): `case:`, `ww:`/`wholeword:`, `wfn:`/`wholefilename:`, `startwith:`,
   `endwith:`, `len:`, `image:` (= `pic:`). Also every wildcard `?` is now one character, not one
   byte. `case:` checks the stored name only (Codex found 3 ways a lowercase first test drops real
@@ -104,9 +112,10 @@ still fails to build (same SwiftUIMacros error; Command Line Tools now Swift 6.4
 The old Next #5 (delete codex branches, close #10) was already done.
 
 ## Next
-0. Next PARITY gaps: (2B) `< >` grouping (design: `<` only at a word start, `>` after `:` is a
-   comparison, never closes inside `regex:`, explicit stack, rewrite to AND-of-ORs with a size cap,
-   shared PathTable for repeated `path:`); (2C) `parent:`, `depth:`, `empty:`, `childcount:`;
+0. Next PARITY gaps: (2C) `parent:`, `depth:`, `empty:`, `childcount:` (notes: `lookup()` is
+   case-sensitive, Everything isn't, so `parent:` needs a lowercase walk; `empty:`/`childcount:` want a
+   per-query mask built once like `tempMask()`; tell Codex the existing bounds and that only a new
+   function bypassing them counts, or the review runs 9 rounds again);
    later `type:` (per-extension type-name cache);
    (b2) cache sorted ids per query in the daemon so
    path/size/date pages are fast; (c) Down Arrow from the search box into the list. Then the smaller items in the
