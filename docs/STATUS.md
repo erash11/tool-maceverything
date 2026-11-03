@@ -2,6 +2,15 @@
 
 ## Current state
 **2026-11-03 (read first):**
+- MERGED #18 (gap 2, part C): `parent:`/`infolder:` (direct children; case ignored; walks from
+  every root the path starts with), `depth:`/`parents:` (path parts: `/` 0, `/Volumes/X` 2),
+  `childcount:`, `empty:` (folders only). A root such as /Volumes/CRASHBOX counts as a child of
+  the indexed folder at its exact path (/Volumes is recorded by the walk of / but not entered).
+  Limit: all `parent:` paths of a query may name 4,096 folders. Installed from `main` 9441e9a
+  (backups `*.pre-folders-2026-11-03`). Live: `parent:/Users` 3, `parent:/Volumes` 1,
+  `depth:<=2` 263, `empty:` 145,366. Codex: 7 rounds; R7-F1 (Unicode case folding, e.g. Greek
+  final sigma) rejected: name search has the same limit; fix it in `searchForm` for all searches.
+  Gap 2 is now done except `type:`, `dc:`, `child:`.
 - MERGED #17 (gap 2, part B): `< >` grouping (`<a b> | c`, `!<a b>`, nesting). Groups flatten to
   the AND-of-ORs the matcher runs. Limits (past one, no results, no message): 32 deep, 4,096
   expanded terms, 256 tests per record (an `ext:` counts each extension; measured: a 256-way OR
@@ -112,11 +121,9 @@ still fails to build (same SwiftUIMacros error; Command Line Tools now Swift 6.4
 The old Next #5 (delete codex branches, close #10) was already done.
 
 ## Next
-0. Next PARITY gaps: (2C) `parent:`, `depth:`, `empty:`, `childcount:` (notes: `lookup()` is
-   case-sensitive, Everything isn't, so `parent:` needs a lowercase walk; `empty:`/`childcount:` want a
-   per-query mask built once like `tempMask()`; tell Codex the existing bounds and that only a new
-   function bypassing them counts, or the review runs 9 rounds again);
-   later `type:` (per-extension type-name cache);
+0. Next PARITY gaps: `type:` (per-extension type-name cache; brief Codex with the existing
+   bounds and that case-sensitive-volume edge cases past them are out of scope, or it runs 7+
+   rounds again, as #17 and #18 did);
    (b2) cache sorted ids per query in the daemon so
    path/size/date pages are fast; (c) Down Arrow from the search box into the list. Then the smaller items in the
    2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
