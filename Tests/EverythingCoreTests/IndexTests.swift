@@ -223,6 +223,12 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(index.search(Query.parse("case:?.md")).total, 1)
         XCTAssertEqual(index.search(Query.parse("!case:?.md file:")).total, 2)
         XCTAssertEqual(index.search(Query.parse("case:*.md")).total, 1)
+        // "H" + U+0331 lowercases and composes to "ẖ", which holds no "h"; the stored name still has "H".
+        index.add(ScannedEntry(name: "H\u{331}.rtf", isDirectory: false, size: 1, modified: 0), parent: root)
+        XCTAssertEqual(index.search(Query.parse("case:H *.rtf")).total, 1)
+        XCTAssertEqual(index.search(Query.parse("case:*H*")).total, 1)
+        XCTAssertEqual(index.search(Query.parse("!case:H *.rtf")).total, 0)
+        XCTAssertEqual(index.search(Query.parse("case:h *.rtf")).total, 0)
     }
 
     func testSizeNamesAndRanges() {

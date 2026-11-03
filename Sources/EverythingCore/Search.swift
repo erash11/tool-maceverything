@@ -132,15 +132,8 @@ struct CompiledQuery {
             t.kind = Kind.sizeRange; t.negated = neg; t.cmp = CompiledQuery.cmpCode(cmp); t.a = low; t.b = high
         case let .modified(cmp, start, end, neg):
             t.kind = Kind.modified; t.negated = neg; t.cmp = CompiledQuery.cmpCode(cmp); t.a = start; t.b = end
-        case let .cased(low, cased, glob, neg):
-            t.kind = glob ? Kind.casedGlob : Kind.cased; t.negated = neg
-            t.start = addBytes(low); t.length = low.count
-            // The lowercase test is a safe first step only when it can't reject a real match:
-            // lowercasing can depend on the letters around it (Greek final sigma: "ΟΣ" -> "ος", but
-            // "Σ" -> "σ"), so the needle must be ASCII; and it can change a name's length ("İ" -> "i" +
-            // a combining dot), which `*` absorbs but `?` doesn't.
-            t.cmp = cased.allSatisfy { $0 < 0x80 } && !(glob && cased.contains(UInt8(ascii: "?"))) ? 1 : 0
-            t.a = Int64(addBytes(cased)); t.b = Int64(cased.count)
+        case let .cased(n, glob, neg):
+            t.kind = glob ? Kind.casedGlob : Kind.cased; t.negated = neg; t.start = addBytes(n); t.length = n.count
         case let .wholeWord(n, neg):
             t.kind = Kind.word; t.negated = neg; t.start = addBytes(n); t.length = n.count
         case let .length(cmp, n, neg):
@@ -442,12 +435,10 @@ struct MatchContext {
                 case CompiledQuery.Kind.never:
                     hit = false
                 case CompiledQuery.Kind.cased, CompiledQuery.Kind.casedGlob:
-                    // The lowercase test first: it is cheap and rules out most names.
-                    // (Only for an ASCII needle, t.cmp == 1; see compile.)
-                    let glob = t.kind == CompiledQuery.Kind.casedGlob
-                    hit = t.cmp == 0 || (glob ? globBytes(lower, start, len, qbytes, t.start, t.length)
-                                              : containsBytes(lower, start, len, qbytes, t.start, t.length))
-                    if hit { hit = casedMatch(r, glob: glob, nStart: Int(t.a), n: Int(t.b)) }
+                    // No lowercase first test: lowercasing can depend on nearby letters (Greek final
+                    // sigma), change a name's length ("İ" -> "i" + a dot) or let accents compose
+                    // ("H" + U+0331 -> "ẖ"), so it can reject a real match.
+                    hit = casedMatch(r, glob: t.kind == CompiledQuery.Kind.casedGlob, nStart: t.start, n: t.length)
                 case CompiledQuery.Kind.word:
                     hit = wordBytes(lower, start, len, qbytes, t.start, t.length)
                 case CompiledQuery.Kind.length:

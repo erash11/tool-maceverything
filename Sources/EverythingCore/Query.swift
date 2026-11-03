@@ -17,9 +17,9 @@ public struct Query {
         /// `>` above it, `>=` from its low end, `<` below it, `<=` up to its high end.
         case sizeRange(Comparison, Int64, Int64, negated: Bool)
         case modified(Comparison, Int64, Int64, negated: Bool) // [start, end) seconds since 1970
-        /// `case:Report`: the name holds this text with this case. `lower` finds candidates; `cased`
-        /// (precomposed, case kept) is then checked against the name as stored. `glob` = whole-name wildcards.
-        case cased(lower: [UInt8], cased: [UInt8], glob: Bool, negated: Bool)
+        /// `case:Report`: the name as stored (precomposed) holds this text, case kept (precomposed too).
+        /// `glob` = whole-name wildcards.
+        case cased([UInt8], glob: Bool, negated: Bool)
         /// `ww:report`: the name holds this text as a whole word (see wordBytes).
         case wholeWord([UInt8], negated: Bool)
         /// `len:>200`: the name's length in characters.
@@ -113,8 +113,7 @@ public struct Query {
             }
             switch modifier {
             case "case:":
-                return .cased(lower: Array(low.utf8), cased: Array(value.precomposedStringWithCanonicalMapping.utf8),
-                              glob: wild, negated: negated)
+                return .cased(Array(value.precomposedStringWithCanonicalMapping.utf8), glob: wild, negated: negated)
             case "ww:", "wholeword:":
                 return wild ? .invalid(raw) : .wholeWord(Array(low.utf8), negated: negated)
             // Wildcards inside the value keep their meaning.
