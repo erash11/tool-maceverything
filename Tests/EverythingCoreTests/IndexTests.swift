@@ -347,6 +347,22 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(names(overlap, "parent:/"), ["Users", "users"]) // the root /Users is the folder Users
         XCTAssertEqual(names(overlap, "childcount:2"), ["/", "users"])
 
+        // One spelling per folder path; a path naming more than maxParentFolders folders (case
+        // spellings on a case-sensitive volume) matches nothing, negated too.
+        XCTAssertEqual(Query.parse("parent://data//Reports/").groups, Query.parse("parent:/data/reports").groups)
+        XCTAssertEqual(Query.parse("parent://").groups, Query.parse("parent:/").groups)
+        let many = FileIndex()
+        let m = many.addRoot("/")
+        let letters = Array("abcdefghijklm")
+        for i in 0...Query.maxParentFolders {
+            let name = String(letters.enumerated().map { i >> $0.offset & 1 == 1 ? Character($0.element.uppercased()) : $0.element })
+            many.add(ScannedEntry(name: name, isDirectory: true, size: 0, modified: 0), parent: m)
+        }
+        many.sortIfNeeded(force: true)
+        XCTAssertEqual(many.search(Query.parse("parent:/abcdefghijklm")).total, 0)
+        XCTAssertEqual(many.search(Query.parse("!parent:/abcdefghijklm")).total, 0)
+        XCTAssertEqual(many.search(Query.parse("parent:/")).total, Query.maxParentFolders + 1)
+
         // After these filters, ">" compares inside a group, as after size:.
         XCTAssertEqual(Query.parse("<depth:>2>").groups, Query.parse("depth:>2").groups)
         XCTAssertEqual(Query.parse("<!parents:>2 file:>").groups, Query.parse("!parents:>2 file:").groups)

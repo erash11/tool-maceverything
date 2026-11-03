@@ -92,11 +92,14 @@ struct CompiledQuery {
 
     /// Finds each parent: folder once (`folders` and `rootsIn` come from the index) and points every
     /// parent: term at its folder ids (`start`, `length`) and at the roots directly in those folders
-    /// (`a`, `b`).
-    mutating func resolveParents(_ folders: ([UInt8]) -> [Int32], rootsIn: [(root: Int32, folder: Int32)]) {
+    /// (`a`, `b`). Returns false when the paths name more than Query.maxParentFolders folders.
+    mutating func resolveParents(_ folders: ([UInt8], Int) -> [Int32]?, rootsIn: [(root: Int32, folder: Int32)]) -> Bool {
         var ranges: [(start: Int, count: Int, rootStart: Int, rootCount: Int)] = []
+        var named = 0
         for path in parentPaths {
-            let ids = folders(path).sorted()
+            guard let found = folders(path, Query.maxParentFolders - named) else { return false }
+            named += found.count
+            let ids = found.sorted()
             let rootIds = rootsIn.filter { ids.contains($0.folder) }.map(\.root).sorted()
             ranges.append((parentIds.count, ids.count, parentIds.count + ids.count, rootIds.count))
             parentIds += ids
@@ -109,6 +112,7 @@ struct CompiledQuery {
             terms[k].a = Int64(range.rootStart)
             terms[k].b = Int64(range.rootCount)
         }
+        return true
     }
 
     /// Adds `b` once: a needle repeated by `< >` expansion reuses its first copy, so `bytes` stays
@@ -341,7 +345,7 @@ extension FileIndex {
         let count = records.count
         if count == 0 { return [] }
         let rootsIn = compiled.parentPaths.isEmpty && !compiled.hasChildCount ? [] : rootsInFolders()
-        compiled.resolveParents(folders(atLowerPath:), rootsIn: rootsIn)
+        guard compiled.resolveParents(folders(atLowerPath:limit:), rootsIn: rootsIn) else { return [] }
         let cores = ProcessInfo.processInfo.activeProcessorCount
         let chunkCount = max(1, min(cores * 4, (count + 16_383) / 16_384))
         let chunkSize = (count + chunkCount - 1) / chunkCount
@@ -412,8 +416,9 @@ extension FileIndex {
     /// Everything, so a case-sensitive volume can give more than one ("A" and "a"). Empty when
     /// there is none. The walk starts from every root the path starts with (not only the longest,
     /// as lookup does): a root /Users must not hide a folder users that / holds. Each record has one
-    /// chain of parents, so the walks never return the same id twice.
-    func folders(atLowerPath lowerPath: [UInt8]) -> [Int32] {
+    /// chain of parents, so the walks never return the same id twice. Nil as soon as more than
+    /// `limit` folders match at any step.
+    func folders(atLowerPath lowerPath: [UInt8], limit: Int = Query.maxParentFolders) -> [Int32]? {
         let slash = UInt8(ascii: "/")
         var path = lowerPath[...]
         while path.count > 1 && path.last == slash { path = path.dropLast() }
@@ -428,12 +433,16 @@ extension FileIndex {
             for component in path.dropFirst(root.count).split(separator: slash) {
                 var next: [Int32] = []
                 for dir in current {
-                    for kid in children[dir] ?? [] where lowerName(kid).elementsEqual(component) { next.append(kid) }
+                    for kid in children[dir] ?? [] where lowerName(kid).elementsEqual(component) {
+                        next.append(kid)
+                        if found.count + next.count > limit { return nil }
+                    }
                 }
                 current = next
                 if current.isEmpty { break }
             }
             found += current
+            if found.count > limit { return nil }
         }
         return found
     }
@@ -457,7 +466,7 @@ extension FileIndex {
             let leaf = String(last)
             let folderPath = "/" + parts.dropLast().joined(separator: "/")
             // The case-insensitive walk finds the candidates; the exact path picks the folder.
-            let candidates = folders(atLowerPath: Array(FileIndex.searchForm(folderPath).utf8))
+            let candidates = folders(atLowerPath: Array(FileIndex.searchForm(folderPath).utf8)) ?? []
             for folder in candidates where folder != id && path(of: folder) == folderPath {
                 if (children[folder] ?? []).contains(where: { name(of: $0) == leaf }) { continue }
                 out.append((id, folder))

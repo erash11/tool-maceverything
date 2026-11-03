@@ -125,6 +125,9 @@ public struct Query {
     /// may hold only this many of each; past it, it matches nothing.
     static let maxDistinctRegexes = 16
     static let maxDistinctPaths = 16
+    /// Most folders the parent: paths of one query may name together. A path names more than one
+    /// folder only on a case-sensitive volume ("A" and "a"); past this, the query matches nothing.
+    static let maxParentFolders = 4096
 
     /// The most tests one record may need: each term is one, an `ext:` term one per extension (an
     /// `ext:` list repeated by `< >` expansion is tested again in every group it lands in). Measured on
@@ -292,10 +295,12 @@ public struct Query {
         if lower == "temp:" { return .temp(negated: negated) }
         if lower == "empty:" { return .childCount(.equal, 0, negated: negated) }
         if let prefix = ["parent:", "infolder:"].first(where: { lower.hasPrefix($0) }) {
-            var path = String(lower.dropFirst(prefix.count))
-            while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+            let value = lower.dropFirst(prefix.count)
             // shortcut: absolute paths only; `~` and relative paths match nothing. Add `~` when asked.
-            return path.hasPrefix("/") ? .parent(Array(path.utf8), negated: negated) : .invalid(raw)
+            guard value.hasPrefix("/") else { return .invalid(raw) }
+            // One spelling per folder: no repeated or trailing "/" ("//a/b/" is "/a/b").
+            let path = "/" + value.split(separator: "/").joined(separator: "/")
+            return .parent(Array(path.utf8), negated: negated)
         }
         if let prefix = ["len:", "depth:", "parents:", "childcount:"].first(where: { lower.hasPrefix($0) }) {
             let (cmp, rest) = comparison(String(lower.dropFirst(prefix.count)))
