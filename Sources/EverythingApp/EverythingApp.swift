@@ -154,7 +154,11 @@ final class SearchModel: ObservableObject {
     /// The current search's request, reused with a new offset for each further page.
     private var request = IPCRequest(command: "search")
     private var loadingMore = false
+    /// The generation whose first page `pages` holds; paging waits until it equals `generation`,
+    /// so rows of the previous search can't ask for a page of the new one.
+    private var pagesGeneration = -1
     private var timing = ""
+    private var pageError = ""
 
     init() {
         refreshScopes()
@@ -215,6 +219,8 @@ final class SearchModel: ObservableObject {
             DispatchQueue.main.async {
                 guard gen == self.generation else { return }
                 if let first { self.pages.reset(with: first) } else { self.pages = ResultPages() }
+                self.pagesGeneration = gen
+                self.pageError = ""
                 self.timing = first == nil ? "" : text
                 self.hits = self.pages.hits
                 self.message = first == nil ? text : self.footer()
@@ -225,7 +231,12 @@ final class SearchModel: ObservableObject {
     /// Called as rows come on screen: near the end of what is loaded, fetch the next page, so the
     /// list scrolls through every match instead of stopping at the first page.
     func rowAppeared(_ hit: SearchHit) {
-        guard pages.hasMore, !loadingMore, pages.isNearEnd(hit.path) else { return }
+        guard pages.isNearEnd(hit.path) else { return }
+        loadNextPage(attempt: 0)
+    }
+
+    private func loadNextPage(attempt: Int) {
+        guard pagesGeneration == generation, pages.hasMore, !loadingMore else { return }
         loadingMore = true
         let gen = generation
         var next = request
@@ -234,19 +245,31 @@ final class SearchModel: ObservableObject {
         queue.async {
             let page = (try? IPC.send(next))?.result
             DispatchQueue.main.async {
-                guard gen == self.generation else { return }
+                guard gen == self.generation else { return } // run() already reset loadingMore
                 self.loadingMore = false
-                // A failed page leaves the list as it is; scrolling near the end tries again.
-                guard let page else { return }
-                self.pages.append(page)
+                guard next.offset == self.pages.nextOffset else { return }
+                guard let page else {
+                    // Visible rows don't appear again, so retry here, a few times.
+                    if attempt < 3 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.loadNextPage(attempt: attempt + 1) }
+                    } else {
+                        self.pageError = "  ·  could not load more rows"
+                        self.message = self.footer()
+                    }
+                    return
+                }
+                let added = self.pages.append(page)
+                self.pageError = ""
                 self.hits = self.pages.hits
                 self.message = self.footer()
+                // A page of rows already shown puts nothing new on screen to ask for the next one.
+                if added == 0 { self.loadNextPage(attempt: 0) }
             }
         }
     }
 
     private func footer() -> String {
-        pages.hasMore ? timing + "  ·  showing \(pages.hits.count.formatted())" : timing
+        (pages.hasMore ? timing + "  ·  showing \(pages.hits.count.formatted())" : timing) + pageError
     }
 }
 

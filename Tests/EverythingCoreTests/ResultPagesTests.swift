@@ -24,10 +24,18 @@ final class ResultPagesTests: XCTestCase {
         // A file created above the page boundary pushes "b" into the next page too.
         var p = ResultPages()
         p.reset(with: page(["a", "b"], total: 4))
-        p.append(page(["b", "c"], total: 4))
+        XCTAssertEqual(p.append(page(["b", "c"], total: 4)), 1)
         XCTAssertEqual(p.hits.map(\.name), ["a", "b", "c"])
         XCTAssertEqual(p.nextOffset, 4)
         XCTAssertFalse(p.hasMore)
+    }
+
+    func testPageOfOnlyRepeatsAddsNothingButMovesOn() {
+        var p = ResultPages()
+        p.reset(with: page(["a", "b"], total: 6))
+        XCTAssertEqual(p.append(page(["a", "b"], total: 6)), 0)
+        XCTAssertEqual(p.nextOffset, 4)
+        XCTAssertTrue(p.hasMore)
     }
 
     func testEmptyPageStopsLoading() {

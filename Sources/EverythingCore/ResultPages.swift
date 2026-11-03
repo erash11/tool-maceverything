@@ -32,9 +32,13 @@ public struct ResultPages {
         add(first)
     }
 
-    /// Adds the page fetched at `nextOffset`.
-    public mutating func append(_ page: SearchResult) {
+    /// Adds the page fetched at `nextOffset`. Returns how many new rows it added: a page of
+    /// repeats adds none, and then no new row comes on screen to ask for the next page.
+    @discardableResult
+    public mutating func append(_ page: SearchResult) -> Int {
+        let before = hits.count
         add(page)
+        return hits.count - before
     }
 
     /// True when `path` is within `prefetchMargin` rows of the end of what is loaded.
