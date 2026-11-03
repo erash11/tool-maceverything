@@ -54,6 +54,9 @@ public final class FileIndex {
     /// See `kindTable()`, cached the same way with its own lock.
     let kindLock = NSLock()
     var kindCache: KindTable?
+    /// See `pathOrder()`, cached the same way with its own lock.
+    let pathOrderLock = NSLock()
+    var pathOrderCache: (records: Int, order: [Int32], rank: [Int32])?
 
     /// Saved FSEvents state per root path.
     public var volumeState: [String: VolumeState] = [:]
@@ -290,6 +293,35 @@ public final class FileIndex {
         rank = r
     }
 
+    /// Every live record in path order, and each record's place in it (-1 for none): a folder comes
+    /// before what it holds, the items in a folder in name order (so `a/z` comes before `a b`, as
+    /// in Everything), roots in name order. A live record's name and parent never change and a
+    /// deletion leaves the others' order as it was (the search skips deleted records), so the
+    /// cache is rebuilt only when records are added. Compaction (adopt) drops it. 8 bytes per
+    /// record. Reads only, so it runs under the shared lock, like tempMask.
+    func pathOrder() -> (order: [Int32], rank: [Int32]) {
+        pathOrderLock.lock()
+        defer { pathOrderLock.unlock() }
+        if let cached = pathOrderCache, cached.records == records.count { return (cached.order, cached.rank) }
+        let nameRank = rank
+        func less(_ a: Int32, _ b: Int32) -> Bool {
+            let ra = nameRank[Int(a)], rb = nameRank[Int(b)]
+            // The name rank is lowerBytesLess as of the last sort; ids added since have none.
+            return ra >= 0 && rb >= 0 ? ra < rb : lowerBytesLess(a, b)
+        }
+        var order: [Int32] = []
+        order.reserveCapacity(liveCount)
+        var place = [Int32](repeating: -1, count: records.count)
+        var stack = Array(roots.sorted(by: less).reversed())
+        while let id = stack.popLast() {
+            place[Int(id)] = Int32(order.count)
+            order.append(id)
+            if let kids = children[id], !kids.isEmpty { stack.append(contentsOf: kids.sorted(by: less).reversed()) }
+        }
+        pathOrderCache = (records.count, order, place)
+        return (order, place)
+    }
+
     /// Takes over another index's contents, so holders of this instance see the new data.
     public func adopt(_ other: FileIndex) {
         tempMaskLock.lock()
@@ -298,6 +330,9 @@ public final class FileIndex {
         kindLock.lock()
         kindCache = nil
         kindLock.unlock()
+        pathOrderLock.lock()
+        pathOrderCache = nil
+        pathOrderLock.unlock()
         records = other.records
         names = other.names
         lowerNames = other.lowerNames

@@ -13,7 +13,7 @@ The 10 gaps most likely to make it feel broken for someone coming from Everythin
 2. **Mostly fixed 2026-11-03: `case:`, `ww:`, `wfn:`, `startwith:`, `endwith:`, `len:`, `image:` work (PR #16); `< >` grouping (PR #17); `parent:`, `depth:`, `empty:`, `childcount:` (PR #18); `type:` (PR #19); still missing: `dc:`, `child:`.** Was: **Functions and modifiers it doesn't know become literal text, so they return 0.** `case:`, `parent:`, `ww:`, `dc:`, `empty:`, `type:`, `image:` and `<…>` grouping return 0 results, with no error.
 3. **The type, arrow, Enter habit doesn't work.** Down Arrow doesn't move from the search box into the results. Enter opens the first hit alphabetically, not the one you open most.
 4. **Fixed 2026-11-03 (PR #14): the list loads more rows as you scroll** (scroll bar covers loaded rows only; path/size/date sort makes each page ~3.5 s). Was: **The list stops at 500 rows.** The window asks the daemon for only 500 results. The status bar can say "1,452,260 objects", but scrolling ends at row 500.
-5. **Sorting by anything but Name is slow.** Path, Size and Date sort every match on every keystroke: 2.2 s, 0.5 s and 0.2 s for `a`. Everything keeps fast-sort indexes. Type and Extension can't be sorted at all.
+5. **Mostly fixed 2026-11-03 (PR #20): Path, Size and Date sorts are fast** (`a`, 1.6M matches, 500 rows: path 2.5 s → 0.21 s with the path order rebuilt, size 0.4 s → 26 ms, date 0.23 s → 23 ms; every later page as fast). Path order is folder first, then names (`a/z` before `a b`), as in Everything. Still missing: Type and Extension can't be sorted. Was: **Sorting by anything but Name is slow.** Path, Size and Date sort every match on every keystroke: 2.2 s, 0.5 s and 0.2 s for `a`. Everything keeps fast-sort indexes.
 6. **You can't do anything to a file from the results.** There's no rename (F2), no Move to Trash, no drag-out, no cut or paste, and no Get Info. Cmd+C copies path text, not the files.
 7. **No search history and no run count.** There's no history dropdown, Ctrl+Space completion, Back/Forward, or "most opened first".
 8. **Mostly fixed 2026-11-03 (PR #15): periods, rolling windows, months, years and ranges work; still missing: month/weekday names, `dc:`/`da:`.** Was: **Date search covers only the basics.** It understands today, yesterday, a rolling 7 days, and one exact date. There are no ranges, relative dates or month/year values, and no `dc:`/`da:` (creation and access dates are not stored).
@@ -169,7 +169,7 @@ Source: [Indexes](https://www.voidtools.com/support/everything/indexes/), [Folde
 | Index file size and date modified | Yes | **Have**: `Record.size`, `.modified` (FileIndex.swift:26-27) | `ev --long 'size:>1gb'` (non-cloud query) |
 | Index folder sizes | Option | **Missing**: folders stored as 0 (Scanner.swift:94, :179) | `ev --long folder: -n 5` shows `<dir>` |
 | Index date created / accessed / attributes | Options | **Missing**: not in `Record` (FileIndex.swift:19-27) | n/a |
-| Fast sort indexes (size, date, path, extension) | Options | **Missing**: only name has a presorted order (FileIndex.swift:42; Search.swift:158-159); others sort per query (Search.swift:160-173) | See Speed |
+| Fast sort indexes (size, date, path, extension) | Options | **Partial** (2026-11-03, PR #20): name and path have a presorted order (path rebuilt only when records are added, ~0.2 s); size and date keep only the rows asked for (a heap), not a full sort; no extension order | See Speed |
 | Force rebuild | Index > Force Rebuild | **Have**: EverythingApp.swift:20, `ev --rescan` (ev/main.swift:198-202) | Menu bar > Rebuild Index |
 | Add/remove indexed locations in a UI | Options > Folders | **Have** in source: Locations window (EverythingApp.swift:428-530); the installed 10-16 app uses older exclusions (STATUS) | Menu bar > Locations… |
 
@@ -198,7 +198,7 @@ Source: [Indexes (fast sort)](https://www.voidtools.com/support/everything/index
 | --- | --- | --- | --- |
 | Name search per keystroke | Instant | **Have**: `a` 20 ms, `report` 17 ms, `report 2026` 16 ms, `*.pdf` 29 ms, `regex:^IMG_\d+` 18 ms, `report !temp:` 20 ms, `dm:thisweek` 6 ms, `size:>1gb` 5 ms | `ev --json -n 1 report`, read `milliseconds` |
 | Path and filter searches | Instant | **Have**: `path:football` 53 ms, `video:` 50 ms | `ev --json -n 1 path:football` |
-| Sorted by Path / Size / Date while typing | Instant with fast sort | **Partial**: `a` with 500 rows: path 2,159 ms, size 504 ms, modified 216 ms (Search.swift:160-173 sorts every match) | `ev --json -n 500 --sort path a` |
+| Sorted by Path / Size / Date while typing | Instant with fast sort | **Have** (2026-11-03, PR #20): `a` with 500 rows (1.6M matches): path 212 ms when the path order is rebuilt, size 26 ms, modified 23 ms (`ev --direct`) | `ev --json -n 500 --sort path a` |
 | First full index | ~1 min per million files (NTFS) | **Have**: 122 s for 3.21M entries (STATUS 2026-10-24) | `ev --rescan`, then `ev --status` |
 | Memory | Low | **Have**: 186 MB for 2.58M entries (`ev --status`) | `ev --status` |
 

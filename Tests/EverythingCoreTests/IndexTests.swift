@@ -736,6 +736,64 @@ final class IndexTests: XCTestCase {
         return index
     }
 
+    func testSortOrdersMatchBruteForce() {
+        let index = makeDeepIndex()
+        let root = index.lookup("/")!
+        // Siblings where path text order and folder-first order differ: "a b" < "a/" as text.
+        let a = index.add(ScannedEntry(name: "a", isDirectory: true, size: 0, modified: 0), parent: root)
+        index.add(ScannedEntry(name: "z.txt", isDirectory: false, size: 7, modified: 5), parent: a)
+        index.add(ScannedEntry(name: "a b", isDirectory: true, size: 0, modified: 0), parent: root)
+        index.add(ScannedEntry(name: "a-b", isDirectory: false, size: 7, modified: 9), parent: root)
+        index.addRoot("/Volumes/X")
+        index.sortIfNeeded(force: true)
+
+        // Path order by its definition: compare the folder chains part by part, a folder first.
+        func chain(_ id: Int32) -> [Int32] {
+            var c = [id]
+            while index.records[Int(c.last!)].parent >= 0 { c.append(index.records[Int(c.last!)].parent) }
+            return c.reversed()
+        }
+        func pathLess(_ x: Int32, _ y: Int32) -> Bool {
+            let cx = chain(x), cy = chain(y)
+            for (p, q) in zip(cx, cy) where p != q { return index.lowerBytesLess(p, q) }
+            return cx.count < cy.count
+        }
+        func live() -> [Int32] { index.records.indices.filter { !index.records[$0].isDeleted }.map { Int32($0) } }
+        func sorted(_ sort: SortKey, _ descending: Bool, limit: Int = 10_000, offset: Int = 0) -> [String] {
+            index.search(Query.parse(""), options: SearchOptions(limit: limit, offset: offset, sort: sort,
+                                                                 descending: descending)).hits.map(\.path)
+        }
+        func check(_ label: String) {
+            let byPath = live().sorted(by: pathLess).map { index.path(of: $0) }
+            XCTAssertEqual(sorted(.path, false), byPath, label)
+            XCTAssertEqual(sorted(.path, true), byPath.reversed(), label)
+            for (sort, key) in [(SortKey.size, { (r: Record) in r.size }), (.modified, { (r: Record) in r.modified })] {
+                let ids = live().sorted { key(index.records[Int($0)]) != key(index.records[Int($1)])
+                    ? key(index.records[Int($0)]) < key(index.records[Int($1)]) : $0 < $1 }
+                let asc = ids.map { index.path(of: $0) }
+                XCTAssertEqual(sorted(sort, false), asc, label)
+                XCTAssertEqual(sorted(sort, true), asc.reversed(), label)
+                // A short page takes the heap; pages join up exactly, both ways.
+                for desc in [false, true] {
+                    let all = desc ? Array(asc.reversed()) : asc
+                    XCTAssertEqual(sorted(sort, desc, limit: 5), Array(all.prefix(5)), label)
+                    XCTAssertEqual(sorted(sort, desc, limit: 5) + sorted(sort, desc, limit: 7, offset: 5),
+                                   Array(all.prefix(12)), label)
+                }
+            }
+            XCTAssertEqual(sorted(.path, false, limit: 5) + sorted(.path, false, limit: 7, offset: 5),
+                           Array(byPath.prefix(12)), label)
+        }
+        XCTAssertLessThan(sorted(.path, false).firstIndex(of: "/a/z.txt")!, sorted(.path, false).firstIndex(of: "/a b")!)
+        check("fresh")
+        // Added records (no name sort yet) rebuild the path order; a removal leaves it as it was.
+        index.add(ScannedEntry(name: "A0", isDirectory: false, size: 3, modified: 1), parent: a)
+        index.add(ScannedEntry(name: "mid", isDirectory: false, size: 3, modified: 1), parent: root)
+        check("after add")
+        index.remove(index.lookup("/a/z.txt")!)
+        check("after remove")
+    }
+
     func testPathTermsMatchBruteForce() {
         let index = makeDeepIndex()
         let all = (0..<Int32(index.records.count)).filter { !index.records[Int($0)].isDeleted }
