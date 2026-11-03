@@ -242,6 +242,144 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(index.search(Query.parse("case:h *.rtf")).total, 0)
     }
 
+    func testFolderFunctions() {
+        // makeIndex: /data (depth 1) holds Reports and film (2), each holding two files (3).
+        let index = makeIndex()
+        XCTAssertEqual(names(index, "parent:/data"), ["film", "Reports"])
+        XCTAssertEqual(names(index, "parent:/DATA/reports"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "infolder:/data/Reports/"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "file: !parent:/data/film"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "parent:/data/nope"), [])
+        XCTAssertEqual(names(index, "!parent:/data/nope").count, 7) // a missing folder holds nothing
+        XCTAssertEqual(names(index, "\"parent:/data/reports/q1 report.pdf\""), []) // a file holds nothing
+        XCTAssertEqual(names(index, "depth:1"), ["/data"])
+        XCTAssertEqual(names(index, "depth:2"), ["film", "Reports"])
+        XCTAssertEqual(names(index, "parents:>2"), ["game1.mp4", "notes.txt", "q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "!depth:3"), ["/data", "film", "Reports"])
+        XCTAssertEqual(names(index, "childcount:2"), ["/data", "film", "Reports"])
+        XCTAssertEqual(names(index, "childcount:0"), []) // files never match
+        XCTAssertEqual(names(index, "empty:"), [])
+
+        // A folder emptied by a rescan, then a file removed.
+        let film = index.lookup("/data/film")!
+        index.replaceChildren(of: film, with: [])
+        XCTAssertEqual(names(index, "empty:"), ["film"])
+        XCTAssertEqual(names(index, "childcount:0"), ["film"])
+        XCTAssertEqual(names(index, "childcount:2"), ["/data", "Reports"])
+        index.remove(index.lookup("/data/Reports/q1 report.pdf")!)
+        XCTAssertEqual(names(index, "childcount:1"), ["Reports"])
+        XCTAssertEqual(names(index, "!empty:"), ["/data", "Q2 Report.docx", "Reports"])
+        XCTAssertEqual(names(index, "empty: | parent:/data/reports"), ["film", "Q2 Report.docx"])
+
+        // Depth counts path parts, so a root like /Volumes/X starts at 2. The longest root wins, and
+        // a case-sensitive volume can hold Users and users: parent: finds both. The walk of / records
+        // Volumes without entering it; the root /Volumes/X counts as in it.
+        let disk = FileIndex()
+        let top = disk.addRoot("/")
+        let upper = disk.add(ScannedEntry(name: "Users", isDirectory: true, size: 0, modified: 0), parent: top)
+        let lower = disk.add(ScannedEntry(name: "users", isDirectory: true, size: 0, modified: 0), parent: top)
+        disk.add(ScannedEntry(name: "a.txt", isDirectory: false, size: 1, modified: 0), parent: upper)
+        disk.add(ScannedEntry(name: "b.txt", isDirectory: false, size: 1, modified: 0), parent: lower)
+        disk.add(ScannedEntry(name: "Volumes", isDirectory: true, size: 0, modified: 0), parent: top)
+        let vol = disk.addRoot("/Volumes/X")
+        let a = disk.add(ScannedEntry(name: "a", isDirectory: true, size: 0, modified: 0), parent: vol)
+        disk.add(ScannedEntry(name: "deep.txt", isDirectory: false, size: 1, modified: 0), parent: a)
+        let docs = disk.add(ScannedEntry(name: "My Docs", isDirectory: true, size: 0, modified: 0), parent: vol)
+        disk.add(ScannedEntry(name: "c.txt", isDirectory: false, size: 1, modified: 0), parent: docs)
+        disk.sortIfNeeded(force: true)
+        XCTAssertEqual(names(disk, "depth:0"), ["/"])
+        XCTAssertEqual(names(disk, "depth:2"), ["/Volumes/X", "a.txt", "b.txt"])
+        XCTAssertEqual(names(disk, "depth:3 | parent:/volumes"), ["/Volumes/X", "a", "My Docs"])
+        XCTAssertEqual(names(disk, "parent:/Volumes/"), ["/Volumes/X"])
+        XCTAssertEqual(names(disk, "!parent:/volumes depth:2"), ["a.txt", "b.txt"])
+        XCTAssertEqual(names(disk, "depth:4"), ["c.txt", "deep.txt"])
+        XCTAssertEqual(names(disk, "parent:/"), ["Users", "users", "Volumes"])
+        XCTAssertEqual(names(disk, "parent:/USERS"), ["a.txt", "b.txt"])
+        XCTAssertEqual(names(disk, "parent:/Volumes/x"), ["a", "My Docs"])
+        XCTAssertEqual(names(disk, "\"parent:/volumes/x/my docs\""), ["c.txt"])
+        XCTAssertEqual(names(disk, "parent:/volumes/xy"), [])
+        XCTAssertEqual(names(disk, "childcount:1"), ["a", "My Docs", "Users", "users", "Volumes"])
+        XCTAssertEqual(names(disk, "empty:"), [])
+
+        // When the folder already lists a child of the root's name, the root isn't counted twice.
+        let twice = FileIndex()
+        let slash = twice.addRoot("/")
+        let volumes = twice.add(ScannedEntry(name: "Volumes", isDirectory: true, size: 0, modified: 0), parent: slash)
+        twice.add(ScannedEntry(name: "X", isDirectory: true, size: 0, modified: 0), parent: volumes)
+        twice.addRoot("/Volumes/X")
+        twice.addRoot("/elsewhere/Y") // its folder isn't indexed
+        twice.sortIfNeeded(force: true)
+        XCTAssertEqual(names(twice, "parent:/volumes"), ["X"])
+        XCTAssertEqual(names(twice, "childcount:1"), ["/", "Volumes"])
+        XCTAssertEqual(names(twice, "parent:/elsewhere"), [])
+        XCTAssertEqual(names(twice, "empty:"), ["/elsewhere/Y", "/Volumes/X", "X"])
+
+        // On a case-sensitive volume, a folder x is not the root X: both count, and the root is in
+        // Volumes, not in volumes. An accent encoded another way is the same name.
+        let cased = FileIndex()
+        let top2 = cased.addRoot("/")
+        let vols = cased.add(ScannedEntry(name: "Volumes", isDirectory: true, size: 0, modified: 0), parent: top2)
+        cased.add(ScannedEntry(name: "x", isDirectory: true, size: 0, modified: 0), parent: vols)
+        cased.add(ScannedEntry(name: "Cafe\u{301}", isDirectory: true, size: 0, modified: 0), parent: vols)
+        cased.add(ScannedEntry(name: "volumes", isDirectory: true, size: 0, modified: 0), parent: top2)
+        cased.addRoot("/Volumes/X")
+        cased.addRoot("/Volumes/Caf\u{E9}")
+        cased.sortIfNeeded(force: true)
+        XCTAssertEqual(cased.search(Query.parse("parent:/volumes")).total, 3) // Café, x and the root X
+        XCTAssertEqual(cased.search(Query.parse("parent:/volumes case:X")).total, 1) // the root X only
+        XCTAssertEqual(names(cased, "childcount:3"), ["Volumes"])
+        XCTAssertEqual(names(cased, "empty: depth:1"), ["volumes"]) // the root X is in Volumes only
+
+        // A root can sit inside another root's walk (/Users under /). parent: walks from every root
+        // the path starts with, so the folder users that / holds isn't lost, and the root /users/Y
+        // counts in users only.
+        let overlap = FileIndex()
+        let o = overlap.addRoot("/")
+        let ou = overlap.add(ScannedEntry(name: "Users", isDirectory: true, size: 0, modified: 0), parent: o)
+        overlap.add(ScannedEntry(name: "a.txt", isDirectory: false, size: 1, modified: 0), parent: ou)
+        let ol = overlap.add(ScannedEntry(name: "users", isDirectory: true, size: 0, modified: 0), parent: o)
+        overlap.add(ScannedEntry(name: "b.txt", isDirectory: false, size: 1, modified: 0), parent: ol)
+        let usersRoot = overlap.addRoot("/Users")
+        overlap.add(ScannedEntry(name: "r.txt", isDirectory: false, size: 1, modified: 0), parent: usersRoot)
+        overlap.addRoot("/users/Y")
+        overlap.sortIfNeeded(force: true)
+        XCTAssertEqual(names(overlap, "parent:/users"), ["/users/Y", "a.txt", "b.txt", "r.txt"])
+        XCTAssertEqual(names(overlap, "parent:/"), ["Users", "users"]) // the root /Users is the folder Users
+        XCTAssertEqual(names(overlap, "childcount:2"), ["/", "users"])
+
+        // One spelling per folder path; a path naming more than maxParentFolders folders (case
+        // spellings on a case-sensitive volume) matches nothing, negated too.
+        XCTAssertEqual(Query.parse("parent://data//Reports/").groups, Query.parse("parent:/data/reports").groups)
+        XCTAssertEqual(Query.parse("parent://").groups, Query.parse("parent:/").groups)
+        let many = FileIndex()
+        let m = many.addRoot("/")
+        let letters = Array("abcdefghijklm")
+        for i in 0...Query.maxParentFolders {
+            let name = String(letters.enumerated().map { i >> $0.offset & 1 == 1 ? Character($0.element.uppercased()) : $0.element })
+            many.add(ScannedEntry(name: name, isDirectory: true, size: 0, modified: 0), parent: m)
+        }
+        many.addRoot("/abcdefghijklm/R") // a root in one of those folders
+        many.sortIfNeeded(force: true)
+        XCTAssertEqual(many.search(Query.parse("parent:/abcdefghijklm")).total, 0)
+        XCTAssertEqual(many.search(Query.parse("!parent:/abcdefghijklm")).total, 0)
+        XCTAssertEqual(many.search(Query.parse("parent:/")).total, Query.maxParentFolders + 1)
+        // Only the folders a path ends at count, not those passed on the way.
+        XCTAssertEqual(many.search(Query.parse("parent:/abcdefghijklm/missing")).total, 0)
+        XCTAssertEqual(many.search(Query.parse("!parent:/abcdefghijklm/missing")).total, Query.maxParentFolders + 3)
+        // A root's own folder is found by its exact path, with no limit: R is in abcdefghijklm only.
+        XCTAssertEqual(names(many, "childcount:1"), ["abcdefghijklm"])
+
+        // After these filters, ">" compares inside a group, as after size:.
+        XCTAssertEqual(Query.parse("<depth:>2>").groups, Query.parse("depth:>2").groups)
+        XCTAssertEqual(Query.parse("<!parents:>2 file:>").groups, Query.parse("!parents:>2 file:").groups)
+        XCTAssertEqual(Query.parse("<childcount:>1>").groups, Query.parse("childcount:>1").groups)
+        XCTAssertEqual(Query.parse("<empty:>").groups, Query.parse("empty:").groups)
+        for bad in ["parent:", "parent:data", "infolder:~/x", "depth:", "depth:x", "parents:>", "childcount:-1",
+                    "childcount:99999999999999999999", "!depth:2.5"] {
+            XCTAssertEqual(Query.parse(bad).groups, [[.invalid(bad)]], bad)
+        }
+    }
+
     func testGroups() {
         // makeIndex names: /data, Reports, q1 report.pdf, Q2 Report.docx, film, game1.mp4, notes.txt.
         let index = makeIndex()

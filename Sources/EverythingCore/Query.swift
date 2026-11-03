@@ -24,6 +24,14 @@ public struct Query {
         case wholeWord([UInt8], negated: Bool)
         /// `len:>200`: the name's length in characters.
         case length(Comparison, Int64, negated: Bool)
+        /// `parent:/Users/x`: directly inside that folder, not in its subfolders. Lowercase path, case
+        /// ignored; the folder is found when the search runs (a missing folder holds nothing).
+        case parent([UInt8], negated: Bool)
+        /// `depth:2`: the folders above it in its path. `/` is 0, `/Users` 1, `/Volumes/X/a` 3.
+        case depth(Comparison, Int64, negated: Bool)
+        /// `childcount:3`: a folder holding that many files and folders; `empty:` is `childcount:0`.
+        /// Files never match.
+        case childCount(Comparison, Int64, negated: Bool)
         case filesOnly
         case foldersOnly
         /// Temp and generated files, and everything inside temp folders (see TempFiles).
@@ -40,7 +48,8 @@ public struct Query {
     /// Parses Everything-style syntax: `foo bar`, `"exact phrase"`, `a | b`, `!skip`, `*.pdf`,
     /// `ext:pdf;docx`, `path:Football`, `drive:Work`, `size:>1gb`, `dm:today`, `regex:^IMG_\d+`,
     /// `file:`, `folder:`; modifiers `case:Report`, `ww:report`, `wfn:notes.txt`, `startwith:q`,
-    /// `endwith:.txt`; `len:>200`; groups `<a b> | c`, `!<a b>`.
+    /// `endwith:.txt`; `len:>200`; folders `parent:/Users/x`, `depth:2`, `childcount:>10`, `empty:`;
+    /// groups `<a b> | c`, `!<a b>`.
     public static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> Query {
         // An explicit stack, not recursion: `<<<<…` can't run deep.
         struct Frame {
@@ -116,6 +125,9 @@ public struct Query {
     /// may hold only this many of each; past it, it matches nothing.
     static let maxDistinctRegexes = 16
     static let maxDistinctPaths = 16
+    /// Most folders the parent: paths of one query may name together. A path names more than one
+    /// folder only on a case-sensitive volume ("A" and "a"); past this, the query matches nothing.
+    static let maxParentFolders = 4096
 
     /// The most tests one record may need: each term is one, an `ext:` term one per extension (an
     /// `ext:` list repeated by `< >` expansion is tested again in every group it lands in). Measured on
@@ -179,6 +191,9 @@ public struct Query {
         case let .cased(b, g, n): return .cased(b, glob: g, negated: !n)
         case let .wholeWord(b, n): return .wholeWord(b, negated: !n)
         case let .length(c, v, n): return .length(c, v, negated: !n)
+        case let .parent(p, n): return .parent(p, negated: !n)
+        case let .depth(c, v, n): return .depth(c, v, negated: !n)
+        case let .childCount(c, v, n): return .childCount(c, v, negated: !n)
         case .filesOnly: return .foldersOnly
         case .foldersOnly: return .filesOnly
         case let .temp(n): return .temp(negated: !n)
@@ -195,19 +210,20 @@ public struct Query {
 
     /// Splits on spaces, `|` and `< >`. Quotes keep everything inside as one word. `<` opens a group
     /// only at a word's start (`!<` negates it); `>` closes one only inside a group, never inside a
-    /// `regex:` word (end it with a space: `<regex:a >`), and not right after `size:`, `dm:` or `len:`
+    /// `regex:` word (end it with a space: `<regex:a >`), and not right after a filter that compares
     /// (`<size:>1gb>` compares, then closes; `<file:>report` closes after `file:`).
     static func tokenize(_ text: String) -> [Token] {
         var tokens: [Token] = []
         var current = ""
         // The current word as it grows, kept so each check reads a few characters, not the word:
-        // its leading "!"s, its first 7 characters after them, and its length in characters.
+        // its leading "!"s, its first 11 characters after them (the longest filter name, `childcount:`),
+        // and its length in characters.
         var bangs = 0, head = "", length = 0
         var inQuotes = false
         var depth = 0
         func add(_ ch: Character) {
             current.append(ch)
-            if ch == "!" && length == bangs { bangs += 1 } else if head.count < 7 { head.append(ch) }
+            if ch == "!" && length == bangs { bangs += 1 } else if head.count < 11 { head.append(ch) }
             length += 1
         }
         func reset() { current = ""; bangs = 0; head = ""; length = 0 }
@@ -219,7 +235,7 @@ public struct Query {
         func inRegex() -> Bool { head.lowercased().hasPrefix("regex:") }
         // The filters whose value can start with ">": there, `>` compares instead of closing.
         func isComparisonFilter() -> Bool {
-            bangs <= 1 && length == bangs + head.count && ["size:", "dm:", "len:"].contains(head.lowercased())
+            bangs <= 1 && length == bangs + head.count && comparingFilters.contains(head.lowercased())
         }
         let chars = Array(text)
         for (i, ch) in chars.enumerated() {
@@ -247,7 +263,8 @@ public struct Query {
                 depth += 1
                 continue
             }
-            // After size:/dm:/len:, ">" compares only when a value follows it; `<size:>` closes.
+            // After size:, dm: and the other comparingFilters, ">" compares only when a value follows
+            // it; `<size:>` closes.
             if ch == ">" && depth > 0 && !inRegex() {
                 let valueFollows = i + 1 < chars.count && !" \t\n|>".contains(chars[i + 1])
                 if !(valueFollows && isComparisonFilter()) {
@@ -276,6 +293,26 @@ public struct Query {
         if lower == "file:" { return negated ? .foldersOnly : .filesOnly }
         if lower == "folder:" { return negated ? .filesOnly : .foldersOnly }
         if lower == "temp:" { return .temp(negated: negated) }
+        if lower == "empty:" { return .childCount(.equal, 0, negated: negated) }
+        if let prefix = ["parent:", "infolder:"].first(where: { lower.hasPrefix($0) }) {
+            let value = lower.dropFirst(prefix.count)
+            // shortcut: absolute paths only; `~` and relative paths match nothing. Add `~` when asked.
+            guard value.hasPrefix("/") else { return .invalid(raw) }
+            // One spelling per folder: no repeated or trailing "/" ("//a/b/" is "/a/b").
+            let path = "/" + value.split(separator: "/").joined(separator: "/")
+            return .parent(Array(path.utf8), negated: negated)
+        }
+        if let prefix = ["len:", "depth:", "parents:", "childcount:"].first(where: { lower.hasPrefix($0) }) {
+            let (cmp, rest) = comparison(String(lower.dropFirst(prefix.count)))
+            guard !rest.isEmpty, rest.allSatisfy({ $0.isASCII && $0.isNumber }), let n = Int64(rest) else {
+                return .invalid(raw)
+            }
+            switch prefix {
+            case "len:": return .length(cmp, n, negated: negated)
+            case "childcount:": return .childCount(cmp, n, negated: negated)
+            default: return .depth(cmp, n, negated: negated)
+            }
+        }
         if let filter = FileFilter.forKeyword(lower), let list = FileFilter.extensions[filter] {
             return .ext(list.map { Array(("." + $0).utf8) }, negated: negated)
         }
@@ -299,13 +336,6 @@ public struct Query {
             case "endwith:": return .glob(Array(("*" + low).utf8), negated: negated)
             default: return .glob(Array(low.utf8), negated: negated) // wfn: with no wildcard is the exact name
             }
-        }
-        if lower.hasPrefix("len:") {
-            let (cmp, rest) = comparison(String(lower.dropFirst(4)))
-            guard !rest.isEmpty, rest.allSatisfy({ $0.isASCII && $0.isNumber }), let n = Int64(rest) else {
-                return .invalid(raw)
-            }
-            return .length(cmp, n, negated: negated)
         }
         if lower.hasPrefix("ext:") {
             // Split no further than the test budget allows: one more piece means the list is too long.
@@ -360,6 +390,9 @@ public struct Query {
 
     /// Everything's text modifiers, as typed (lowercase).
     static let textModifiers = ["case:", "ww:", "wholeword:", "wfn:", "wholefilename:", "startwith:", "endwith:"]
+
+    /// The filters whose value can start with `>` (see tokenize). Each fits in 11 characters.
+    static let comparingFilters: Set<String> = ["size:", "dm:", "len:", "depth:", "parents:", "childcount:"]
 
     static func comparison(_ s: String) -> (Comparison, String) {
         if s.hasPrefix(">=") { return (.greaterOrEqual, String(s.dropFirst(2))) }

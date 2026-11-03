@@ -18,6 +18,7 @@ query syntax:
   !temp:            hide temp and generated files (node_modules, .git, caches, *.tmp)
   dm:today  dm:yesterday  dm:thisweek  dm:>2026-10-01
   regex:^IMG_\\d+    file:  folder:
+  parent:/Users/x   only items directly in that folder   depth:2  childcount:>10  empty:
 
 options:
   -n, --limit N     results to print (default 100, 0 = all)
