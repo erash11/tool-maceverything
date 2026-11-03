@@ -402,7 +402,7 @@ struct SearchView: View {
     @ViewBuilder private var resultsTable: some View {
         if #available(macOS 14, *) {
             // Right-click a header to show or hide columns; drag a header to move it.
-            withBehavior(Table(model.hits, selection: $selection, sortOrder: $sortOrder,
+            withBehavior(Table(of: SearchHit.self, selection: $selection, sortOrder: $sortOrder,
                                columnCustomization: columnCustomization) {
                 TableColumn("Name", value: \.name) { nameCell($0) }
                     .customizationID("name")
@@ -429,9 +429,11 @@ struct SearchView: View {
                 }
                 .customizationID("fullpath")
                 .defaultVisibility(.hidden)
+            } rows: {
+                ForEach(model.hits) { hit in TableRow(hit).itemProvider { Self.dragItem(hit) } }
             })
         } else {
-            withBehavior(Table(model.hits, selection: $selection, sortOrder: $sortOrder) {
+            withBehavior(Table(of: SearchHit.self, selection: $selection, sortOrder: $sortOrder) {
                 TableColumn("Name", value: \.name) { nameCell($0) }
                 TableColumn("Type", value: \.kindName) { typeCell($0) }
                     .width(min: 80, ideal: 150, max: 260)
@@ -442,8 +444,17 @@ struct SearchView: View {
                     .width(min: 110, ideal: 140, max: 180)
                 TableColumn("Extension", value: \.extensionName) { hit in Text(hit.extensionName) }
                     .width(min: 50, ideal: 70, max: 120)
+            } rows: {
+                ForEach(model.hits) { hit in TableRow(hit).itemProvider { Self.dragItem(hit) } }
             })
         }
+    }
+
+    /// What a dragged row carries, as a Finder drag does (a file URL): drop it in Finder, Mail or
+    /// any app that takes files; Finder's own rules apply (a move within one drive, a copy to
+    /// another, Option to copy).
+    private static func dragItem(_ hit: SearchHit) -> NSItemProvider {
+        NSItemProvider(object: URL(fileURLWithPath: hit.path) as NSURL)
     }
 
     private func typeCell(_ hit: SearchHit) -> some View {
