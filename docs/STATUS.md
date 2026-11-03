@@ -2,6 +2,15 @@
 
 ## Current state
 **2026-11-03 (read first):**
+- MERGED #15: `dm:` periods (this/last week, month, year), rolling windows (`last7days`,
+  `past3weeks`, `last12hours`; open-ended, so future dates count; `>`/`<` compare with the
+  cutoff), `2026`, `2026-10`, `a..b` ranges; `size:` names (empty, tiny = 1 B to 10 KB, small,
+  medium, large, huge, gigantic) and ranges. `dm:thisweek` is now the calendar week (was the last
+  7 days). Daemon and `ev` installed from `main` eb344e6 (backups `*.pre-dates-2026-11-03`).
+  Codex: 5 rounds; the last fix (a rolling window can't be a range end) is after the cap, not
+  Codex-reviewed. Scrolling past row 500 confirmed by Eric.
+- The GitHub repo is now `erash11/tool-maceverything` (planned rename, ~/DEV/REPO_CHANGES.md);
+  `scripts/install-app-from-ci.sh` still names the old repo and works through GitHub's redirect.
 - MERGED #14: the results list loads more rows as you scroll (first 500, then 2000 per page by
   offset; `ResultPages` in EverythingCore). App installed from CI run 41660743834. Codex: 5
   rounds, approved. Scrolling past row 500 NOT yet seen in the window. Page cost: name sort 39 to
@@ -90,8 +99,8 @@ still fails to build (same SwiftUIMacros error; Command Line Tools now Swift 6.4
 The old Next #5 (delete codex branches, close #10) was already done.
 
 ## Next
-0. Next PARITY gaps: (a2) support the values people type: `dm:lastweek`/`thismonth`, `dm:2026`,
-   `..` ranges, `size:empty|tiny|...|huge`; (b2) cache sorted ids per query in the daemon so
+0. Next PARITY gaps: (2) unknown functions (`case:`, `parent:`, `ww:`, `type:`, `image:`, `< >`);
+   (b2) cache sorted ids per query in the daemon so
    path/size/date pages are fast; (c) Down Arrow from the search box into the list. Then the smaller items in the
    2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
 1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
