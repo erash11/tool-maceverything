@@ -6,7 +6,8 @@
   folder), so a trashed file leaves the window's results. Found by Eric's #24 test: Move to Trash
   worked, but the row stayed (the file was found again in ~/.Trash). Live: the test file is
   `!temp:` 0; `temp:` 853,625 -> 1,055,561. Daemon/ev from `main` 00fc4d3 (backups
-  `*.pre-trash-2026-11-03`), app from main CI. Codex: 2 rounds, approved.
+  `*.pre-trash-2026-11-03`), app from main CI. Codex: 2 rounds, approved. Confirmed by Eric:
+  Cmd+Delete on a test file, the row vanished (2026-11-03).
 - MERGED #24 (gap 6, part A): in the results list, Cmd+C copies the files (paste in Finder),
   Cmd+Shift+C / Cmd+Option+C copy the paths, Cmd+Delete moves to Trash (list refreshes 1.5 s
   later), Cmd+Return shows in Finder; context menu gains Copy and Move to Trash. Every file
