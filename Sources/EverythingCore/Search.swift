@@ -135,6 +135,9 @@ struct CompiledQuery {
         case let .cased(low, cased, glob, neg):
             t.kind = glob ? Kind.casedGlob : Kind.cased; t.negated = neg
             t.start = addBytes(low); t.length = low.count
+            // Lowercasing can depend on the letters around it (Greek final sigma: "ΟΣ" -> "ος", but
+            // "Σ" -> "σ"), so the lowercase test is a safe first step only for an ASCII needle.
+            t.cmp = cased.allSatisfy { $0 < 0x80 } ? 1 : 0
             t.a = Int64(addBytes(cased)); t.b = Int64(cased.count)
         case let .wholeWord(n, neg):
             t.kind = Kind.word; t.negated = neg; t.start = addBytes(n); t.length = n.count
@@ -438,9 +441,10 @@ struct MatchContext {
                     hit = false
                 case CompiledQuery.Kind.cased, CompiledQuery.Kind.casedGlob:
                     // The lowercase test first: it is cheap and rules out most names.
+                    // (Only for an ASCII needle, t.cmp == 1; see compile.)
                     let glob = t.kind == CompiledQuery.Kind.casedGlob
-                    hit = glob ? globBytes(lower, start, len, qbytes, t.start, t.length)
-                               : containsBytes(lower, start, len, qbytes, t.start, t.length)
+                    hit = t.cmp == 0 || (glob ? globBytes(lower, start, len, qbytes, t.start, t.length)
+                                              : containsBytes(lower, start, len, qbytes, t.start, t.length))
                     if hit { hit = casedMatch(r, glob: glob, nStart: Int(t.a), n: Int(t.b)) }
                 case CompiledQuery.Kind.word:
                     hit = wordBytes(lower, start, len, qbytes, t.start, t.length)
@@ -522,25 +526,36 @@ func characterCount(_ hay: UnsafeBufferPointer<UInt8>, _ start: Int, _ len: Int)
     return count
 }
 
-/// Matches `*` and `?` against the whole name.
+/// Matches `*` and `?` against the whole name. `?` is one character (all its UTF-8 bytes), and `*`
+/// gives back one character at a time, so `s` stays on a character edge.
 func globBytes(_ hay: UnsafeBufferPointer<UInt8>, _ start: Int, _ len: Int,
                _ pattern: UnsafeBufferPointer<UInt8>, _ pStart: Int, _ pLen: Int) -> Bool {
     let star = UInt8(ascii: "*"), question = UInt8(ascii: "?")
     var s = 0, p = 0
     var starP = -1, starS = 0
     while s < len {
-        if p < pLen && (pattern[pStart + p] == question || pattern[pStart + p] == hay[start + s]) {
+        if p < pLen && pattern[pStart + p] == question {
+            s = nextCharacter(hay, start, s, len); p += 1
+        } else if p < pLen && pattern[pStart + p] == hay[start + s] {
             s += 1; p += 1
         } else if p < pLen && pattern[pStart + p] == star {
             starP = p; starS = s; p += 1
         } else if starP >= 0 {
-            p = starP + 1; starS += 1; s = starS
+            p = starP + 1; starS = nextCharacter(hay, start, starS, len); s = starS
         } else {
             return false
         }
     }
     while p < pLen && pattern[pStart + p] == star { p += 1 }
     return p == pLen
+}
+
+/// The offset after the UTF-8 character at offset `s` (both relative to `start`).
+@inline(__always)
+func nextCharacter(_ hay: UnsafeBufferPointer<UInt8>, _ start: Int, _ s: Int, _ len: Int) -> Int {
+    var i = s + 1
+    while i < len && hay[start + i] & 0xC0 == 0x80 { i += 1 }
+    return i
 }
 
 @inline(__always)

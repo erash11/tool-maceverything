@@ -200,6 +200,24 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(index.search(Query.parse("ww:r\u{E9}sum\u{E9}")).total, 1)
         XCTAssertEqual(index.search(Query.parse("ww:r\u{E9}sum")).total, 0) // an accented letter is a letter
         XCTAssertEqual(index.search(Query.parse("len:10")).total, 1) // 10 characters, 12 bytes
+        // ? is one character, however many bytes it takes.
+        XCTAssertEqual(index.search(Query.parse("r?sum?.pdf")).total, 1)
+        XCTAssertEqual(index.search(Query.parse("case:R?sum?.pdf")).total, 1)
+        XCTAssertEqual(index.search(Query.parse("wfn:r??sum?.pdf")).total, 0)
+        XCTAssertEqual(index.search(Query.parse("*?.pdf")).total, 1)
+    }
+
+    func testCaseWhereLowercaseDependsOnContext() {
+        // "ΟΣ" lowercases to "ος" (final sigma), but a lone "Σ" to "σ": a lowercase first test would miss it.
+        let index = FileIndex()
+        let root = index.addRoot("/d")
+        index.add(ScannedEntry(name: "\u{39F}\u{3A3}", isDirectory: false, size: 1, modified: 0), parent: root)
+        index.add(ScannedEntry(name: "\u{1F600}.txt", isDirectory: false, size: 1, modified: 0), parent: root)
+        index.sortIfNeeded(force: true)
+        XCTAssertEqual(index.search(Query.parse("case:\u{3A3}")).total, 1)
+        XCTAssertEqual(index.search(Query.parse("!case:\u{3A3} file:")).total, 1) // only the emoji file
+        XCTAssertEqual(index.search(Query.parse("?.txt")).total, 1) // one 4-byte character
+        XCTAssertEqual(index.search(Query.parse("len:5 *.txt")).total, 1)
     }
 
     func testSizeNamesAndRanges() {
