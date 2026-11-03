@@ -23,6 +23,29 @@ final class PersistenceTests: XCTestCase {
         XCTAssertNotNil(loaded.lookup("/data/film/new.mov"))
     }
 
+    func testSnapshotIsUnaffectedByLaterChanges() throws {
+        // The daemon writes a snapshot off its update queue while changes keep applying.
+        let index = IndexTests().makeIndex()
+        index.volumeState["/data"] = .init(volumeUUID: "ABC", lastEventId: 7)
+        let snap = index.snapshot()
+        let film = index.lookup("/data/film")!
+        index.add(ScannedEntry(name: "after.mov", isDirectory: false, size: 1, modified: 1), parent: film)
+        index.remove(index.lookup("/data/film/notes.txt")!)
+        index.volumeState["/data"] = .init(volumeUUID: "ABC", lastEventId: 8)
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathComponent("index.bin")
+        try snap.save(to: url)
+        let loaded = try FileIndex.load(from: url)
+        XCTAssertEqual(loaded.liveCount, 7)
+        XCTAssertNotNil(loaded.lookup("/data/film/notes.txt"))
+        XCTAssertNil(loaded.lookup("/data/film/after.mov"))
+        XCTAssertEqual(loaded.volumeState["/data"]?.lastEventId, 7)
+        // The live index has both changes.
+        XCTAssertNotNil(index.lookup("/data/film/after.mov"))
+        XCTAssertNil(index.lookup("/data/film/notes.txt"))
+    }
+
     func testRejectsGarbage() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try Data("hello world, not an index".utf8).write(to: url)

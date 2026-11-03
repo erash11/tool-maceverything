@@ -121,6 +121,12 @@ public final class IndexService {
     private let lifecycle = NSLock()
     private var flushScheduled = false
     private var dirty = false
+    /// Compacts and writes index snapshots off `work`, so live changes keep applying during a
+    /// save (a 212 MB save took 4 to 69 s and blocked every change meanwhile). Serial, so files
+    /// are written in the order their snapshots were taken.
+    private let saveQueue = DispatchQueue(label: "MacEverything.save", qos: .utility)
+    /// A background save is queued or running. Lives on `work`.
+    private var saveInFlight = false
     private var timer: DispatchSourceTimer?
     private let log: (String) -> Void
 
@@ -335,7 +341,7 @@ public final class IndexService {
         }
         dirty = true
         startWatchers(since: fresh.volumeState)
-        work.async { try? self.saveOnWork() }
+        work.async { self.saveInBackground() }
     }
 
     /// Caller holds `lifecycle`.
@@ -654,7 +660,7 @@ public final class IndexService {
             sortOffLock()
         }
         saveCounter += 1
-        if dirty && saveCounter % 10 == 0 { try? saveOnWork() }
+        if dirty && saveCounter % 10 == 0 { saveInBackground() }
     }
     private var saveCounter = 0
     /// Roots whose path disappeared (an unplugged drive). Lives on `work`.
@@ -666,30 +672,58 @@ public final class IndexService {
         index.write { $0.install(order: order) }
     }
 
-    /// Applies queued changes, then saves. Safe from any thread except `work`.
+    /// Applies queued changes, then saves. Safe from any thread except `work`. Returns once the
+    /// file is written, after any background save queued before it.
     public func save() throws {
-        try work.sync { try saveOnWork() }
+        guard let snap = work.sync(execute: { snapshotOnWork() }) else { return }
+        try saveQueue.sync { try write(snap) }
     }
 
-    /// Runs on `work`, so no change can be applied between choosing the event ids and writing.
-    private func saveOnWork() throws {
+    /// Runs on `work`: snapshots now, writes on `saveQueue`. Skipped while one is in flight; the
+    /// index stays dirty, so a later maintenance pass saves it.
+    private func saveInBackground() {
+        guard !saveInFlight, let snap = snapshotOnWork() else { return }
+        saveInFlight = true
+        saveQueue.async {
+            try? self.write(snap)
+            self.work.async { self.saveInFlight = false }
+        }
+    }
+
+    /// Runs on `work`, so no change can be applied between choosing the event ids and taking the
+    /// snapshot: the saved cursors always match the saved records.
+    private func snapshotOnWork() -> (index: FileIndex, started: Date)? {
         // Before the first load or scan finishes, the index is empty; saving it would
         // overwrite a good index file.
-        guard ready else { return }
+        guard ready else { return nil }
         let started = Date()
         flush()
         let applied = appliedEventIds
         sortOffLock()
-        index.write { idx in
+        let snap: FileIndex = index.write { idx in
             for (root, id) in applied {
                 idx.volumeState[root] = .init(volumeUUID: Watcher.volumeUUID(for: root) ?? "", lastEventId: id,
                                               perDevice: idx.volumeState[root]?.perDevice)
             }
+            return idx.snapshot()
         }
-        // Serializing (and compacting, if needed) only reads, so searches continue meanwhile.
-        try index.read { try $0.save(to: indexURL) }
+        // Changes after this point dirty the index again; a failed write below re-dirties it.
         dirty = false
-        log("saved index to \(indexURL.path) in " + String(format: "%.1f s", Date().timeIntervalSince(started)))
+        return (snap, started)
+    }
+
+    /// Runs on `saveQueue`.
+    private func write(_ snap: (index: FileIndex, started: Date)) throws {
+        let wrote = Date()
+        do {
+            try snap.index.save(to: indexURL)
+        } catch {
+            work.async { self.dirty = true }
+            log("could not save index: \(error)")
+            throw error
+        }
+        log("saved index to \(indexURL.path) in " + String(format: "%.1f s", Date().timeIntervalSince(snap.started))
+            + String(format: " (%.1f s off the update queue)", Date().timeIntervalSince(wrote)))
     }
 
     // MARK: - Requests

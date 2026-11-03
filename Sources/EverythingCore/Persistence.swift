@@ -28,6 +28,24 @@ extension FileIndex {
 
     public static var defaultIndexURL: URL { defaultDirectory.appendingPathComponent("index.bin") }
 
+    /// A copy for saving. The arrays are copy-on-write, so this is O(1) under the lock; the first
+    /// change afterwards copies each changed array once. Searches and changes never wait on the
+    /// slow part of a save (compacting and writing), which runs on the copy.
+    public func snapshot() -> FileIndex {
+        let c = FileIndex()
+        c.records = records
+        c.names = names
+        c.lowerNames = lowerNames
+        c.children = children
+        c.order = order
+        c.unsorted = unsorted
+        c.rank = rank
+        c.rootIdList = rootIdList
+        c.deletedCount = deletedCount
+        c.volumeState = volumeState
+        return c
+    }
+
     /// Writes a compacted copy atomically. Deleted records are dropped.
     public func save(to url: URL) throws {
         let c = deletedCount > 0 || !unsorted.isEmpty ? compacted() : self
