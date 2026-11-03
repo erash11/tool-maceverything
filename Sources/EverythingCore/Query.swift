@@ -192,21 +192,26 @@ public struct Query {
     static func tokenize(_ text: String) -> [Token] {
         var tokens: [Token] = []
         var current = ""
+        // The current word as it grows, kept so each check reads a few characters, not the word:
+        // its leading "!"s, its first 7 characters after them, and its length in characters.
+        var bangs = 0, head = "", length = 0
         var inQuotes = false
         var depth = 0
+        func add(_ ch: Character) {
+            current.append(ch)
+            if ch == "!" && length == bangs { bangs += 1 } else if head.count < 7 { head.append(ch) }
+            length += 1
+        }
+        func reset() { current = ""; bangs = 0; head = ""; length = 0 }
         func flush() {
-            if !current.isEmpty { tokens.append(.word(current)); current = "" }
+            if !current.isEmpty { tokens.append(.word(current)) }
+            reset()
         }
-        // Only the word's first 7 characters, so a long word costs nothing per character.
-        // (parseTerm reads one leading "!", so "!!regex:" is not a regex anyway.)
-        func inRegex() -> Bool {
-            let head = current.prefix(7).lowercased()
-            return head.hasPrefix("regex:") || head.hasPrefix("!regex:")
-        }
+        // Any number of leading "!" (as before: "!!regex:a|b" stays one word).
+        func inRegex() -> Bool { head.lowercased().hasPrefix("regex:") }
         // The filters whose value can start with ">": there, `>` compares instead of closing.
         func isComparisonFilter() -> Bool {
-            guard current.utf8.count <= 6 else { return false }
-            return ["size:", "dm:", "len:", "!size:", "!dm:", "!len:"].contains(current.lowercased())
+            bangs <= 1 && length == bangs + head.count && ["size:", "dm:", "len:"].contains(head.lowercased())
         }
         let chars = Array(text)
         for (i, ch) in chars.enumerated() {
@@ -215,7 +220,7 @@ public struct Query {
                 continue
             }
             if inQuotes {
-                current.append(ch)
+                add(ch)
                 continue
             }
             if ch == " " || ch == "\t" || ch == "\n" {
@@ -228,21 +233,23 @@ public struct Query {
                 tokens.append(.or)
                 continue
             }
-            if ch == "<" && (current.isEmpty || current == "!") {
-                tokens.append(.open(negated: !current.isEmpty))
-                current = ""
+            if ch == "<" && length == bangs && bangs <= 1 {
+                tokens.append(.open(negated: bangs == 1))
+                reset() // the "!" belongs to the group
                 depth += 1
                 continue
             }
             // After size:/dm:/len:, ">" compares only when a value follows it; `<size:>` closes.
-            let valueFollows = i + 1 < chars.count && !" \t\n|>".contains(chars[i + 1])
-            if ch == ">" && depth > 0 && !(isComparisonFilter() && valueFollows) && !inRegex() {
-                flush()
-                tokens.append(.close)
-                depth -= 1
-                continue
+            if ch == ">" && depth > 0 && !inRegex() {
+                let valueFollows = i + 1 < chars.count && !" \t\n|>".contains(chars[i + 1])
+                if !(valueFollows && isComparisonFilter()) {
+                    flush()
+                    tokens.append(.close)
+                    depth -= 1
+                    continue
+                }
             }
-            current.append(ch)
+            add(ch)
         }
         flush()
         return tokens

@@ -255,6 +255,11 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(names(index, "<size:> report"), [])
         XCTAssertEqual(names(index, "<size:>|notes"), ["notes.txt"])
         XCTAssertEqual(names(index, "regex:(?<n>game)"), ["game1.mp4"])
+        // Any number of "!" before regex: keeps "|" inside the word, as before groups existed.
+        XCTAssertEqual(Query.tokenize("!!regex:a|b"), [.word("!!regex:a|b")])
+        XCTAssertEqual(Query.tokenize("!regex:a|b"), [.word("!regex:a|b")])
+        XCTAssertEqual(Query.tokenize("!<a>"), [.open(negated: true), .word("a"), .close])
+        XCTAssertEqual(Query.tokenize("!!<a>"), [.word("!!<a>")])
         // !<file: report> = folders, or files without "report".
         XCTAssertEqual(names(index, "!<file: report>"), ["/data", "film", "game1.mp4", "notes.txt", "Reports"])
         // An unreadable term stays unreadable under negation: !<report size:enormous> is !report.
@@ -317,8 +322,12 @@ final class IndexTests: XCTestCase {
         // More words than the term cap match nothing, before any is read; at the cap is fine.
         XCTAssertEqual(index.search(Query.parse(Array(repeating: "zz", count: 4097).joined(separator: " "))).total, 0)
         XCTAssertEqual(Query.parse(Array(repeating: "zz", count: 4096).joined(separator: " ")).groups.count, 4096)
-        // A long regex word full of ">" stays cheap (only its first characters are read).
+        // Long words full of ">" or "|" stay cheap: each check reads only the word's first characters.
+        let started = Date()
         _ = Query.parse("<regex:" + String(repeating: ">", count: 60_000))
+        _ = Query.parse("<" + String(repeating: "!", count: 30_000) + String(repeating: ">", count: 30_000))
+        _ = Query.parse("<size" + String(repeating: ">", count: 60_000))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
     }
 
     func testSizeNamesAndRanges() {
