@@ -191,6 +191,16 @@ final class SearchModel: ObservableObject {
         }
     }
 
+    /// Searches again after the app changed files (Move to Trash). The daemon applies a file event
+    /// about 0.5 s after it happens (0.3 s event latency, then a 0.2 s flush), so this waits 1.5 s.
+    /// Not `sync`: it drains an unfinished walk before it answers, which can take minutes, and
+    /// searches would queue behind it.
+    /// shortcut: a fixed wait; if the event is ever later, the trashed row stays until the next
+    /// search. Add a bounded "apply pending events" request to the daemon if that shows up.
+    func refreshAfterChange() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.run() }
+    }
+
     /// Whether `hits` are the first page of the search the box, scope and filter now ask for (not
     /// rows of an earlier one still waiting to be replaced).
     var hitsAreCurrent: Bool { pagesGeneration == generation }
@@ -375,10 +385,6 @@ struct SearchView: View {
             if (note.object as? NSWindow)?.identifier == Self.panelID { downPending = false }
         }
         .onExitCommand { NSApp.keyWindow?.orderOut(nil) }
-        .onCopyCommand {
-            let paths = selection.isEmpty ? [] : Array(selection)
-            return paths.isEmpty ? [] : [NSItemProvider(object: paths.joined(separator: "\n") as NSString)]
-        }
     }
 
     // MARK: - Results table
@@ -495,12 +501,18 @@ struct SearchView: View {
                     model.setSort(key, descending: descending)
                 }
             }
+            // Each action takes only rows of the current search, checked when it runs: the rows of an
+            // earlier search stay on screen until the new one arrives.
             .contextMenu(forSelectionType: String.self) { paths in
-                Button("Open") { open(paths, reveal: false) }
-                Button("Reveal in Finder") { open(paths, reveal: true) }
-                Button("Copy Path") { copy(paths) }
+                Button("Open") { act(on: paths) { open($0, reveal: false) } }
+                Button("Reveal in Finder") { act(on: paths) { open($0, reveal: true) } }
+                Divider()
+                Button("Copy") { act(on: paths, copyFiles) }
+                Button("Copy Path") { act(on: paths, copy) }
+                Divider()
+                Button("Move to Trash") { act(on: paths, moveToTrash) }
             } primaryAction: { paths in
-                open(paths, reveal: false)
+                act(on: paths) { open($0, reveal: false) }
             }
     }
 
@@ -514,6 +526,25 @@ struct SearchView: View {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            // File commands while the list has the keys, on the selected current rows: Cmd+C copies the
+            // files (paste them in Finder), Cmd+Shift+C (Everything) or Cmd+Option+C (Finder) their
+            // paths as text, Cmd+Delete moves them to the Trash, Cmd+Return shows them in Finder.
+            if Self.listHasKeys(event.window) {
+                // C by the character it types (any keyboard layout); Delete and Return by key.
+                let isC = event.charactersIgnoringModifiers?.lowercased() == "c"
+                let action: ((Set<String>) -> Void)?
+                switch (event.keyCode, modifiers) {
+                case (_, [.command]) where isC: action = copyFiles
+                case (_, [.command, .shift]) where isC, (_, [.command, .option]) where isC: action = copy
+                case (UInt16(kVK_Delete), [.command]): action = moveToTrash
+                case (UInt16(kVK_Return), [.command]): action = { open($0, reveal: true) }
+                default: action = nil
+                }
+                if let action {
+                    act(on: selection, action)
+                    return nil
+                }
+            }
             // Ctrl+1 to Ctrl+6 anywhere in the search panel: see sortShortcuts.
             if modifiers == .control, event.window?.identifier == SearchView.panelID,
                let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }),
@@ -533,6 +564,19 @@ struct SearchView: View {
             }
             return nil
         }
+    }
+
+    /// Whether `window` is the search panel and its results list holds the keys.
+    private static func listHasKeys(_ window: NSWindow?) -> Bool {
+        window?.identifier == panelID && window?.firstResponder is NSTableView
+    }
+
+    /// Runs a file command on the rows of `paths` that belong to the current search (none while rows
+    /// of an earlier one are still shown), so it never acts on a file that doesn't match what was
+    /// typed; with none left, beeps and does nothing.
+    private func act(on paths: Set<String>, _ action: (Set<String>) -> Void) {
+        let rows = model.hitsAreCurrent ? paths.intersection(model.hits.map(\.path)) : []
+        if rows.isEmpty { NSSound.beep() } else { action(rows) }
     }
 
     /// Whether `window` is the search panel and a text field's editor (the search box: the
@@ -603,9 +647,27 @@ struct SearchView: View {
         }
     }
 
+    /// The paths as text, one per line.
     private func copy(_ paths: Set<String>) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(paths.sorted().joined(separator: "\n"), forType: .string)
+    }
+
+    /// The files themselves, as Finder's Copy puts them: paste in Finder copies them there.
+    private func copyFiles(_ paths: Set<String>) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects(paths.sorted().map { URL(fileURLWithPath: $0) as NSURL })
+    }
+
+    /// Moves the files to the Trash (Finder's Move to Trash: Put Back works), then searches again
+    /// once the index has the change.
+    private func moveToTrash(_ paths: Set<String>) {
+        NSWorkspace.shared.recycle(paths.sorted().map { URL(fileURLWithPath: $0) }) { _, error in
+            DispatchQueue.main.async {
+                if let error { model.message = "Couldn't move to Trash: \(error.localizedDescription)" }
+                model.refreshAfterChange()
+            }
+        }
     }
 }
 
