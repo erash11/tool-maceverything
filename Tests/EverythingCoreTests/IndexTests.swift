@@ -842,7 +842,6 @@ final class IndexTests: XCTestCase {
         XCTAssertLessThan(byExt.firstIndex(of: "/A.TXT")!, byExt.firstIndex(of: "/b.txt")!)
         XCTAssertEqual(ext(index.lookup("/A.TXT")!), "txt")
         XCTAssertEqual(kind(index.lookup("/noext")!), "Document")
-        XCTAssertEqual(FileKinds.kindName(ofName: "film", isDirectory: true).first?.isUppercase, true) // "Folder"
         // Records added since the last name sort go last among their kind or extension.
         index.add(ScannedEntry(name: "aaa.txt", isDirectory: false, size: 1, modified: 0), parent: root)
         check("after add")

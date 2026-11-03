@@ -21,7 +21,7 @@ struct KindTable {
 /// the description of the type its extension declares (UTType, in the system's language). A folder
 /// is "folder", a package such as an .app its own kind ("application"), and a file whose extension
 /// declares no type, or that has none, "document", as in the Finder.
-enum FileKinds {
+public enum FileKinds {
     static let maxExtensionLength = 16
 
     /// A folder bit and an extension of up to 16 bytes, packed so looking one up allocates nothing.

@@ -292,14 +292,13 @@ extension FileIndex {
         case .path:
             page = Array(pathOrdered(matched, first: end, descending: options.descending)[offset..<end])
         case .size:
-            let keys = matched.map { records[Int($0)].size }
-            page = Array(keyOrdered(matched, keys: keys, first: end, descending: options.descending)[offset..<end])
+            page = Array(keyOrdered(matched, first: end, descending: options.descending) { records[Int($0)].size }[offset..<end])
         case .modified:
-            let keys = matched.map { records[Int($0)].modified }
-            page = Array(keyOrdered(matched, keys: keys, first: end, descending: options.descending)[offset..<end])
-        case .type, .ext:
-            let keys = options.sort == .type ? typeKeys(matched) : extensionKeys(matched)
-            page = Array(keyOrdered(matched, keys: keys, first: end, descending: options.descending)[offset..<end])
+            page = Array(keyOrdered(matched, first: end, descending: options.descending) { records[Int($0)].modified }[offset..<end])
+        case .type:
+            page = Array(typeOrdered(matched, first: end, descending: options.descending)[offset..<end])
+        case .ext:
+            page = Array(extensionOrdered(matched, first: end, descending: options.descending)[offset..<end])
         }
 
         let hits = page.map { id -> SearchHit in
@@ -394,8 +393,8 @@ extension FileIndex {
         return ranked
     }
 
-    /// Sort keys for Type: the kind's place in text order, then the name's.
-    func typeKeys(_ ids: [Int32]) -> [OrderKey] {
+    /// The first `first` of `ids` by Type: the kind's place in text order, then the name's.
+    func typeOrdered(_ ids: [Int32], first: Int, descending: Bool) -> [Int32] {
         let kinds = kindTable()
         // Each kind's place when the kind texts are sorted (a few hundred texts).
         var place = [UInt64](repeating: 0, count: kinds.count)
@@ -404,15 +403,17 @@ extension FileIndex {
                 .lexicographicallyPrecedes(kinds.bytes[kinds.start[$1]..<kinds.start[$1] + kinds.length[$1]])
         }
         for (i, k) in byText.enumerated() { place[k] = UInt64(i) }
-        return ids.map { OrderKey(high: place[Int(kinds.ids[Int($0)])], low: 0, name: nameKey($0)) }
+        return keyOrdered(ids, first: first, descending: descending) {
+            OrderKey(high: place[Int(kinds.ids[Int($0)])], low: 0, name: nameKey($0))
+        }
     }
 
-    /// Sort keys for Extension: the extension's bytes in order (none, and folders, first; see
-    /// FileKinds.extensionName), then the name's place.
-    func extensionKeys(_ ids: [Int32]) -> [OrderKey] {
+    /// The first `first` of `ids` by Extension: the extension's bytes in order (none, and folders,
+    /// first; see FileKinds.extensionName), then the name's place.
+    func extensionOrdered(_ ids: [Int32], first: Int, descending: Bool) -> [Int32] {
         records.withUnsafeBufferPointer { recs in
         lowerNames.withUnsafeBufferPointer { lower in
-            ids.map { id in
+            keyOrdered(ids, first: first, descending: descending) { id in
                 let r = recs[Int(id)]
                 var pack: (UInt64, UInt64) = (0, 0)
                 if r.flags & 1 == 0, let ext = FileKinds.extensionRange(lower, Int(r.lowerStart), Int(r.lowerLength)) {
@@ -432,22 +433,23 @@ extension FileIndex {
         return r >= 0 ? Int64(r) : Int64.max
     }
 
-    /// The first `first` of `ids` by `keys` (one per id), ties by id, so the order is total and
-    /// pages split the same way every time; descending is the exact reverse. Only the first `first`
-    /// are kept, in a heap (n log first), unless most of them are wanted anyway.
-    func keyOrdered<K: Comparable>(_ ids: [Int32], keys: [K], first: Int, descending: Bool) -> [Int32] {
+    /// The first `first` of `ids` by `key`, ties by id, so the order is total and pages split the
+    /// same way every time; descending is the exact reverse. Only the first `first` are kept, in a
+    /// heap (n log first), with each key worked out as it is read; a full sort, with every key in
+    /// one array, only when most of them are wanted anyway.
+    func keyOrdered<K: Comparable>(_ ids: [Int32], first: Int, descending: Bool, key: (Int32) -> K) -> [Int32] {
         if first == 0 { return [] }
-        var items = zip(keys, ids).map { (key: $0.0, id: $0.1) }
         func before(_ a: (key: K, id: Int32), _ b: (key: K, id: Int32)) -> Bool {
             if a.key != b.key { return descending ? a.key > b.key : a.key < b.key }
             return descending ? a.id > b.id : a.id < b.id
         }
-        if first * 4 >= items.count {
+        if first * 4 >= ids.count {
+            var items = ids.map { (key: key($0), id: $0) }
             items.sort(by: before)
             return items.prefix(first).map(\.id)
         }
         // A heap of the first `first` seen so far, the last of them on top.
-        var heap = Array(items.prefix(first))
+        var heap = ids.prefix(first).map { (key: key($0), id: $0) }
         func siftDown(_ start: Int) {
             var i = start
             while true {
@@ -461,9 +463,12 @@ extension FileIndex {
             }
         }
         for i in stride(from: heap.count / 2 - 1, through: 0, by: -1) { siftDown(i) }
-        for item in items.dropFirst(first) where before(item, heap[0]) {
-            heap[0] = item
-            siftDown(0)
+        for id in ids.dropFirst(first) {
+            let item = (key: key(id), id: id)
+            if before(item, heap[0]) {
+                heap[0] = item
+                siftDown(0)
+            }
         }
         heap.sort(by: before)
         return heap.map(\.id)
