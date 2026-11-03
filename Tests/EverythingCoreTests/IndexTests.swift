@@ -236,6 +236,29 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(Query.parse(chain).groups, [[.invalid(chain)]])
     }
 
+    func testRollingWindowsIncludeFutureDates() {
+        // Everything's default: "last 6 hours" runs from 6 hours ago with no end.
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let now = cal.date(from: DateComponents(year: 2026, month: 10, day: 15, hour: 12))!
+        let t = Int64(now.timeIntervalSince1970)
+        let index = FileIndex()
+        let root = index.addRoot("/x", modified: 0)
+        for (name, time) in [("past", t - 3600), ("old", t - 86_400 * 30), ("tomorrow", t + 86_400), ("future", t + 86_400 * 400)] {
+            index.add(ScannedEntry(name: name, isDirectory: false, size: 1, modified: time), parent: root)
+        }
+        index.sortIfNeeded(force: true)
+        func dm(_ q: String) -> [String] {
+            index.search(Query.parse("file: " + q, now: now, calendar: cal), options: SearchOptions(limit: 100))
+                .hits.map(\.name)
+        }
+        XCTAssertEqual(dm("dm:last6hours"), ["future", "past", "tomorrow"])
+        XCTAssertEqual(dm("dm:last7days"), ["future", "past", "tomorrow"])
+        XCTAssertEqual(dm("!dm:last7days"), ["old"])
+        XCTAssertEqual(dm("dm:<last7days"), ["old"])
+        XCTAssertEqual(dm("dm:today"), ["past"]) // calendar days still end at midnight
+    }
+
     func testDayEdgesWhenATimeChangeSkipsMidnight() {
         // Sao Paulo skipped from 00:00 to 01:00 on 2018-11-04, so that day began at 01:00.
         var cal = Calendar(identifier: .gregorian)

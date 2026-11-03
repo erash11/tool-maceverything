@@ -178,7 +178,7 @@ public struct Query {
     /// Returns the [start, end) of the day, period or range named by `s`:
     /// `today`, `yesterday`; `thisweek`/`lastweek`, `thismonth`/`lastmonth`, `thisyear`/`lastyear`
     /// (calendar periods; `this`/`current` and `last`/`prev`/`previous` all work); `last7days`,
-    /// `past3weeks`, `last12hours` (rolling: back from now, through the end of today; `days`
+    /// `past3weeks`, `last12hours` (rolling: from that far back, with no end, so future dates count; `days`
     /// counts today as one); `2026`, `2026-10`, `2026-10-15`; and `a..b`, from the start of a to
     /// the end of b.
     static func parseDay(_ s: String, now: Date, calendar: Calendar) -> (Int64, Int64)? {
@@ -215,7 +215,8 @@ public struct Query {
             return (secs(calendar.startOfDay(for: calendar.date(byAdding: .day, value: -1, to: today)!)), secs(today))
         }
         if let start = parseRolling(s, now: now, today: today, calendar: calendar) {
-            return (secs(start), secs(tomorrow))
+            // Open-ended, as in Everything: a file dated in the future is still "in the last 7 days".
+            return (secs(start), Int64.max)
         }
         return parseDate(s, calendar: calendar).map { (secs($0.start), secs($0.end)) }
     }
