@@ -794,6 +794,59 @@ final class IndexTests: XCTestCase {
         check("after remove")
     }
 
+    func testTypeAndExtensionSortsMatchBruteForce() {
+        let index = makeDeepIndex()
+        let root = index.lookup("/")!
+        let tool = index.add(ScannedEntry(name: "Tool.app", isDirectory: true, size: 0, modified: 0), parent: root)
+        index.add(ScannedEntry(name: "Info.plist", isDirectory: false, size: 1, modified: 0), parent: tool)
+        for name in ["b.txt", "A.TXT", ".bashrc", "noext", "x.zzqq", "z.pdf"] {
+            index.add(ScannedEntry(name: name, isDirectory: false, size: 1, modified: 0), parent: root)
+        }
+        index.sortIfNeeded(force: true)
+
+        func live() -> [Int32] { index.records.indices.filter { !index.records[$0].isDeleted }.map { Int32($0) } }
+        func nameKey(_ id: Int32) -> Int64 { index.rank[Int(id)] >= 0 ? Int64(index.rank[Int(id)]) : Int64.max }
+        // By definition: the column's text (lowercase bytes), then the name's place, then the id.
+        func expected(_ text: (Int32) -> String) -> [String] {
+            live().sorted { a, b in
+                let ta = Array(FileIndex.searchForm(text(a)).utf8), tb = Array(FileIndex.searchForm(text(b)).utf8)
+                if ta != tb { return ta.lexicographicallyPrecedes(tb) }
+                if nameKey(a) != nameKey(b) { return nameKey(a) < nameKey(b) }
+                return a < b
+            }.map { index.path(of: $0) }
+        }
+        func sorted(_ sort: SortKey, _ descending: Bool, limit: Int = 10_000, offset: Int = 0) -> [String] {
+            index.search(Query.parse(""), options: SearchOptions(limit: limit, offset: offset, sort: sort,
+                                                                 descending: descending)).hits.map(\.path)
+        }
+        func kind(_ id: Int32) -> String {
+            FileKinds.kindName(ofName: index.name(of: id), isDirectory: index.records[Int(id)].isDirectory)
+        }
+        func ext(_ id: Int32) -> String {
+            FileKinds.extensionName(ofName: index.name(of: id), isDirectory: index.records[Int(id)].isDirectory)
+        }
+        func check(_ label: String) {
+            for (sort, text) in [(SortKey.type, kind), (.ext, ext)] {
+                let asc = expected(text)
+                XCTAssertEqual(sorted(sort, false), asc, "\(sort) \(label)")
+                XCTAssertEqual(sorted(sort, true), asc.reversed(), "\(sort) \(label)")
+                XCTAssertEqual(sorted(sort, false, limit: 5) + sorted(sort, false, limit: 7, offset: 5),
+                               Array(asc.prefix(12)), "\(sort) \(label)")
+                XCTAssertEqual(sorted(sort, true, limit: 5), Array(asc.reversed().prefix(5)), "\(sort) \(label)")
+            }
+        }
+        check("fresh")
+        // Folders have no extension and come first; files sharing one keep name order.
+        let byExt = sorted(.ext, false)
+        XCTAssertLessThan(byExt.firstIndex(of: "/Tool.app")!, byExt.firstIndex(of: "/A.TXT")!)
+        XCTAssertLessThan(byExt.firstIndex(of: "/A.TXT")!, byExt.firstIndex(of: "/b.txt")!)
+        XCTAssertEqual(ext(index.lookup("/A.TXT")!), "txt")
+        XCTAssertEqual(kind(index.lookup("/noext")!), "Document")
+        // Records added since the last name sort go last among their kind or extension.
+        index.add(ScannedEntry(name: "aaa.txt", isDirectory: false, size: 1, modified: 0), parent: root)
+        check("after add")
+    }
+
     func testPathTermsMatchBruteForce() {
         let index = makeDeepIndex()
         let all = (0..<Int32(index.records.count)).filter { !index.records[Int($0)].isDeleted }

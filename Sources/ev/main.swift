@@ -24,7 +24,7 @@ query syntax:
 options:
   -n, --limit N     results to print (default 100, 0 = all)
   --offset N        skip the first N results
-  --sort KEY        name | path | size | modified
+  --sort KEY        name | path | size | modified | type | extension
   --desc            reverse the sort
   --count           print only the number of matches
   --long            print size and modified date too
@@ -75,7 +75,7 @@ while i < args.count {
         guard let n = Int(nextValue(a)) else { fail("--offset needs a number") }
         offset = n
     case "--sort":
-        guard let key = SortKey(rawValue: nextValue(a)) else { fail("--sort is name, path, size or modified") }
+        guard let key = SortKey(rawValue: nextValue(a)) else { fail("--sort is name, path, size, modified, type or extension") }
         sort = key
     case "--desc": descending = true
     case "--count": countOnly = true
