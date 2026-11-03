@@ -294,6 +294,9 @@ struct SearchView: View {
     @State private var selection = Set<String>()
     @State private var sortOrder = [KeyPathComparator(\SearchHit.name)]
     @FocusState private var fieldFocused: Bool
+    @FocusState private var tableFocused: Bool
+    /// The Down Arrow watcher (see watchDownArrow); removed when the view goes away.
+    @State private var keyMonitor: Any?
     /// Which columns are shown, their order and widths (right-click a header; drag to reorder).
     /// Defaults to Name | Type | Path, like Everything.
     @AppStorage("resultColumns.v2") private var columnsData = Data()
@@ -334,6 +337,7 @@ struct SearchView: View {
             }
             .padding(10)
             resultsTable
+                .focused($tableFocused)
             HStack {
                 Text(model.message).font(.caption).foregroundStyle(.secondary)
                 Spacer()
@@ -344,7 +348,14 @@ struct SearchView: View {
             .padding(.vertical, 6)
         }
         .frame(minWidth: 600, minHeight: 320)
-        .onAppear { fieldFocused = true }
+        .onAppear {
+            fieldFocused = true
+            watchDownArrow()
+        }
+        .onDisappear {
+            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+            keyMonitor = nil
+        }
         .onExitCommand { NSApp.keyWindow?.orderOut(nil) }
         .onCopyCommand {
             let paths = selection.isEmpty ? [] : Array(selection)
@@ -478,6 +489,25 @@ struct SearchView: View {
             } primaryAction: { paths in
                 open(paths, reveal: false)
             }
+    }
+
+    /// Down Arrow in the search box moves into the results, as in Everything: the first row is
+    /// selected (a selection still on screen is kept) and the list takes the keys, so the next
+    /// Down, Up and Return work there. A local key monitor runs before the text field sees the key
+    /// (SwiftUI's onKeyPress needs macOS 14). Other keys, and Down with a modifier, pass through.
+    private func watchDownArrow() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            // The search panel's only text field is the search box, so its field editor holding
+            // the keys means the box has focus (read from AppKit: this runs outside the view's body).
+            guard event.keyCode == UInt16(kVK_DownArrow), modifiers.isEmpty, event.window is NSPanel,
+                  event.window?.firstResponder is NSTextView,
+                  let first = model.hits.first else { return event }
+            if !model.hits.contains(where: { selection.contains($0.path) }) { selection = [first.path] }
+            tableFocused = true
+            return nil
+        }
     }
 
     private func openSelection(reveal: Bool) {
