@@ -2,6 +2,14 @@
 
 ## Current state
 **2026-11-03 (read first):**
+- MERGED #21 (gap 3, was Next c): Down Arrow in the search box selects the first row (keeps a
+  selection still among the results) and moves focus to the list (AppKit makeFirstResponder;
+  @FocusState did nothing on a second visit, seen live). Waits for current results; Return in the
+  box also waits and opens only current rows. App installed from CI run 41697754145 (main 0b4b385).
+  Codex: 5 rounds, approved. Live: first Down moved focus box -> list (Accessibility check);
+  the full Down, Down, Return on the final build is NOT yet checked (other apps held the front;
+  keys are sent only while the panel is in front). Lesson: when the panel isn't frontmost,
+  System Events keys go to the front app (they landed in Ghostty once, no Return sent).
 - MERGED #20 (gap 5, was Next b2): fast Path/Size/Date sorts. Path: a cached path order (folder
   first, then names: `/a/z` before `/a b`, a change from text order), rebuilt only when records
   are added (~0.2 to 0.27 s; under file churn most first path sorts pay it), 8 B/record. Size and
@@ -137,7 +145,7 @@ The old Next #5 (delete codex branches, close #10) was already done.
 ## Next
 0. Next PARITY gaps (brief Codex with the existing bounds and that case-sensitive-volume edge
    cases past them are out of scope, or it runs 7+ rounds again, as #17 and #18 did):
-   (c) Down Arrow from the search box into the list; sort by Type/Extension; an incremental
+   sort by Type/Extension; Up Arrow from the top row back to the box; an incremental
    path-order merge if the ~0.2 s rebuild under churn shows up in use. Then the smaller items in the
    2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
 1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
