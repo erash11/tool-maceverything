@@ -2,6 +2,11 @@
 
 ## Current state
 **2026-11-03 (read first):**
+- MERGED #16 (gap 2, part A): `case:`, `ww:`/`wholeword:`, `wfn:`/`wholefilename:`, `startwith:`,
+  `endwith:`, `len:`, `image:` (= `pic:`). Also every wildcard `?` is now one character, not one
+  byte. `case:` checks the stored name only (Codex found 3 ways a lowercase first test drops real
+  matches). Daemon and `ev` installed from `main` 5c0a4bd (backups `*.pre-modifiers-2026-11-03`).
+  Codex: 4 rounds, approved. Live: `case:Report` 2,378, `ww:report` 5,615, `image:` = `pic:` 100,623.
 - MERGED #15: `dm:` periods (this/last week, month, year), rolling windows (`last7days`,
   `past3weeks`, `last12hours`; open-ended, so future dates count; `>`/`<` compare with the
   cutoff), `2026`, `2026-10`, `a..b` ranges; `size:` names (empty, tiny = 1 B to 10 KB, small,
@@ -99,7 +104,10 @@ still fails to build (same SwiftUIMacros error; Command Line Tools now Swift 6.4
 The old Next #5 (delete codex branches, close #10) was already done.
 
 ## Next
-0. Next PARITY gaps: (2) unknown functions (`case:`, `parent:`, `ww:`, `type:`, `image:`, `< >`);
+0. Next PARITY gaps: (2B) `< >` grouping (design: `<` only at a word start, `>` after `:` is a
+   comparison, never closes inside `regex:`, explicit stack, rewrite to AND-of-ORs with a size cap,
+   shared PathTable for repeated `path:`); (2C) `parent:`, `depth:`, `empty:`, `childcount:`;
+   later `type:` (per-extension type-name cache);
    (b2) cache sorted ids per query in the daemon so
    path/size/date pages are fast; (c) Down Arrow from the search box into the list. Then the smaller items in the
    2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
