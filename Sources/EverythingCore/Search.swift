@@ -135,9 +135,11 @@ struct CompiledQuery {
         case let .cased(low, cased, glob, neg):
             t.kind = glob ? Kind.casedGlob : Kind.cased; t.negated = neg
             t.start = addBytes(low); t.length = low.count
-            // Lowercasing can depend on the letters around it (Greek final sigma: "ΟΣ" -> "ος", but
-            // "Σ" -> "σ"), so the lowercase test is a safe first step only for an ASCII needle.
-            t.cmp = cased.allSatisfy { $0 < 0x80 } ? 1 : 0
+            // The lowercase test is a safe first step only when it can't reject a real match:
+            // lowercasing can depend on the letters around it (Greek final sigma: "ΟΣ" -> "ος", but
+            // "Σ" -> "σ"), so the needle must be ASCII; and it can change a name's length ("İ" -> "i" +
+            // a combining dot), which `*` absorbs but `?` doesn't.
+            t.cmp = cased.allSatisfy { $0 < 0x80 } && !(glob && cased.contains(UInt8(ascii: "?"))) ? 1 : 0
             t.a = Int64(addBytes(cased)); t.b = Int64(cased.count)
         case let .wholeWord(n, neg):
             t.kind = Kind.word; t.negated = neg; t.start = addBytes(n); t.length = n.count

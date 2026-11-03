@@ -218,6 +218,11 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(index.search(Query.parse("!case:\u{3A3} file:")).total, 1) // only the emoji file
         XCTAssertEqual(index.search(Query.parse("?.txt")).total, 1) // one 4-byte character
         XCTAssertEqual(index.search(Query.parse("len:5 *.txt")).total, 1)
+        // "İ" lowercases to "i" + a combining dot: two characters where the name has one.
+        index.add(ScannedEntry(name: "\u{130}.md", isDirectory: false, size: 1, modified: 0), parent: root)
+        XCTAssertEqual(index.search(Query.parse("case:?.md")).total, 1)
+        XCTAssertEqual(index.search(Query.parse("!case:?.md file:")).total, 2)
+        XCTAssertEqual(index.search(Query.parse("case:*.md")).total, 1)
     }
 
     func testSizeNamesAndRanges() {
