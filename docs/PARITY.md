@@ -10,7 +10,7 @@ Everything features come from voidtools' own docs (1.4, plus 1.5 alpha where mar
 The 10 gaps most likely to make it feel broken for someone coming from Everything, worst first:
 
 1. **Fixed 2026-11-03: unreadable values match nothing (PR #13), and the common values now work (PR #15): `dm:lastweek`, `dm:2026`, `dm:a..b`, `size:huge`, `size:10mb..50mb`.** Was: **Search terms the parser can't read return everything.** Unparsed values are dropped, so `dm:lastweek`, `dm:7days`, `dm:2026`, `size:10mb..50mb` and `size:huge` each return all 2.59M entries, with no error.
-2. **Started 2026-11-03: `case:`, `ww:`, `wfn:`, `startwith:`, `endwith:`, `len:`, `image:` work (PR #16); `< >` grouping (PR B); then `parent:`/`depth:`/`empty:`/`childcount:` (PR C); `type:` and `dc:` later.** Was: **Functions and modifiers it doesn't know become literal text, so they return 0.** `case:`, `parent:`, `ww:`, `dc:`, `empty:`, `type:`, `image:` and `<…>` grouping return 0 results, with no error.
+2. **Mostly fixed 2026-11-03: `case:`, `ww:`, `wfn:`, `startwith:`, `endwith:`, `len:`, `image:` work (PR #16); `< >` grouping (PR #17); `parent:`, `depth:`, `empty:`, `childcount:` (PR #18); still missing: `type:`, `dc:`, `child:`.** Was: **Functions and modifiers it doesn't know become literal text, so they return 0.** `case:`, `parent:`, `ww:`, `dc:`, `empty:`, `type:`, `image:` and `<…>` grouping return 0 results, with no error.
 3. **The type, arrow, Enter habit doesn't work.** Down Arrow doesn't move from the search box into the results. Enter opens the first hit alphabetically, not the one you open most.
 4. **Fixed 2026-11-03 (PR #14): the list loads more rows as you scroll** (scroll bar covers loaded rows only; path/size/date sort makes each page ~3.5 s). Was: **The list stops at 500 rows.** The window asks the daemon for only 500 results. The status bar can say "1,452,260 objects", but scrolling ends at row 500.
 5. **Sorting by anything but Name is slow.** Path, Size and Date sort every match on every keystroke: 2.2 s, 0.5 s and 0.2 s for `a`. Everything keeps fast-sort indexes. Type and Extension can't be sorted at all.
@@ -76,9 +76,9 @@ Source: [Search Modifiers](https://www.voidtools.com/support/everything/search_m
 | `dc:` date created | Created date | **Missing**: not stored. `Record` has only `modified` (FileIndex.swift:19-27) and the scanner asks only for `cmnModTime` (Scanner.swift:103). Needs an index format change. | `ev --count 'dc:today'` = 0 |
 | `da:` date accessed, `rc:` recently changed | Accessed date, recent-change date | **Missing**: same as `dc:` | `ev --count 'da:today'` |
 | `attrib:` | Hidden, system, read-only… | **Missing**: flags hold only directory/deleted (FileIndex.swift:25) | `ev --count 'attrib:H'` = 0 |
-| `parent:` | Direct children of a folder | **Missing**: literal text. `"path:/x/y/"` returns every descendant, not only direct children. | `ev --count 'parent:/Users'` = 0 |
-| `depth:` / `parent-count:` | Folder depth | **Missing** | `ev --count 'depth:2'` = 0 |
-| `child:`, `childcount:`, `empty:` | Folders by what they contain | **Missing**: the child map exists (FileIndex.swift:99) but there's no query term | `ev --count 'empty:'` = 0 |
+| `parent:` / `infolder:` | Direct children of a folder | **Have** (2026-11-03, PR #18): case ignored, trailing `/` ignored; absolute paths only (no `~`); `nosubfolders:` not added | `ev --count 'parent:/Users'` (3); `'parent:/'` = `'depth:1'` (22) |
+| `depth:` / `parents:` | Folder depth | **Have** (2026-11-03, PR #18): folders above it in its path (`/` = 0, `/Volumes/X` = 2), with comparisons | `ev --count 'depth:<=2'` (263) = 1 + 22 + 240 |
+| `child:`, `childcount:`, `empty:` | Folders by what they contain | **Partial** (2026-11-03, PR #18): `childcount:` and `empty:` work (folders only); `child:`, `childfilecount:`, `childfoldercount:` missing. A folder the scanner can't read counts as empty | `ev --count 'empty:'` (145,363); `'empty: \| !empty:'` = all |
 | `dupe:` (1.5) | Duplicate names, sizes, etc. | **Missing** | `ev --count 'dupe:'` = 0 |
 | `content:` | Search file text | **Missing** | `ev --count 'content:invoice'` |
 | `len:` | Name length | **Have** (2026-11-03): characters of the name, with comparisons | `ev --count 'len:>200'` (31); `'len:>1000'` = 0 |

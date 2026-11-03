@@ -242,6 +242,73 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(index.search(Query.parse("case:h *.rtf")).total, 0)
     }
 
+    func testFolderFunctions() {
+        // makeIndex: /data (depth 1) holds Reports and film (2), each holding two files (3).
+        let index = makeIndex()
+        XCTAssertEqual(names(index, "parent:/data"), ["film", "Reports"])
+        XCTAssertEqual(names(index, "parent:/DATA/reports"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "infolder:/data/Reports/"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "file: !parent:/data/film"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "parent:/data/nope"), [])
+        XCTAssertEqual(names(index, "!parent:/data/nope").count, 7) // a missing folder holds nothing
+        XCTAssertEqual(names(index, "\"parent:/data/reports/q1 report.pdf\""), []) // a file holds nothing
+        XCTAssertEqual(names(index, "depth:1"), ["/data"])
+        XCTAssertEqual(names(index, "depth:2"), ["film", "Reports"])
+        XCTAssertEqual(names(index, "parents:>2"), ["game1.mp4", "notes.txt", "q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "!depth:3"), ["/data", "film", "Reports"])
+        XCTAssertEqual(names(index, "childcount:2"), ["/data", "film", "Reports"])
+        XCTAssertEqual(names(index, "childcount:0"), []) // files never match
+        XCTAssertEqual(names(index, "empty:"), [])
+
+        // A folder emptied by a rescan, then a file removed.
+        let film = index.lookup("/data/film")!
+        index.replaceChildren(of: film, with: [])
+        XCTAssertEqual(names(index, "empty:"), ["film"])
+        XCTAssertEqual(names(index, "childcount:0"), ["film"])
+        XCTAssertEqual(names(index, "childcount:2"), ["/data", "Reports"])
+        index.remove(index.lookup("/data/Reports/q1 report.pdf")!)
+        XCTAssertEqual(names(index, "childcount:1"), ["Reports"])
+        XCTAssertEqual(names(index, "!empty:"), ["/data", "Q2 Report.docx", "Reports"])
+        XCTAssertEqual(names(index, "empty: | parent:/data/reports"), ["film", "Q2 Report.docx"])
+
+        // Depth counts path parts, so a root like /Volumes/X starts at 2. The longest root wins, and
+        // a case-sensitive volume can hold Users and users: parent: finds both.
+        let disk = FileIndex()
+        let top = disk.addRoot("/")
+        let upper = disk.add(ScannedEntry(name: "Users", isDirectory: true, size: 0, modified: 0), parent: top)
+        let lower = disk.add(ScannedEntry(name: "users", isDirectory: true, size: 0, modified: 0), parent: top)
+        disk.add(ScannedEntry(name: "a.txt", isDirectory: false, size: 1, modified: 0), parent: upper)
+        disk.add(ScannedEntry(name: "b.txt", isDirectory: false, size: 1, modified: 0), parent: lower)
+        disk.add(ScannedEntry(name: "Volumes", isDirectory: true, size: 0, modified: 0), parent: top)
+        let vol = disk.addRoot("/Volumes/X")
+        let a = disk.add(ScannedEntry(name: "a", isDirectory: true, size: 0, modified: 0), parent: vol)
+        disk.add(ScannedEntry(name: "deep.txt", isDirectory: false, size: 1, modified: 0), parent: a)
+        let docs = disk.add(ScannedEntry(name: "My Docs", isDirectory: true, size: 0, modified: 0), parent: vol)
+        disk.add(ScannedEntry(name: "c.txt", isDirectory: false, size: 1, modified: 0), parent: docs)
+        disk.sortIfNeeded(force: true)
+        XCTAssertEqual(names(disk, "depth:0"), ["/"])
+        XCTAssertEqual(names(disk, "depth:2"), ["/Volumes/X", "a.txt", "b.txt"])
+        XCTAssertEqual(names(disk, "depth:3 | parent:/volumes"), ["a", "My Docs"])
+        XCTAssertEqual(names(disk, "depth:4"), ["c.txt", "deep.txt"])
+        XCTAssertEqual(names(disk, "parent:/"), ["Users", "users", "Volumes"])
+        XCTAssertEqual(names(disk, "parent:/USERS"), ["a.txt", "b.txt"])
+        XCTAssertEqual(names(disk, "parent:/Volumes/x"), ["a", "My Docs"])
+        XCTAssertEqual(names(disk, "\"parent:/volumes/x/my docs\""), ["c.txt"])
+        XCTAssertEqual(names(disk, "parent:/volumes/xy"), [])
+        XCTAssertEqual(names(disk, "childcount:1"), ["a", "My Docs", "Users", "users"])
+        XCTAssertEqual(names(disk, "empty:"), ["Volumes"])
+
+        // After these filters, ">" compares inside a group, as after size:.
+        XCTAssertEqual(Query.parse("<depth:>2>").groups, Query.parse("depth:>2").groups)
+        XCTAssertEqual(Query.parse("<!parents:>2 file:>").groups, Query.parse("!parents:>2 file:").groups)
+        XCTAssertEqual(Query.parse("<childcount:>1>").groups, Query.parse("childcount:>1").groups)
+        XCTAssertEqual(Query.parse("<empty:>").groups, Query.parse("empty:").groups)
+        for bad in ["parent:", "parent:data", "infolder:~/x", "depth:", "depth:x", "parents:>", "childcount:-1",
+                    "childcount:99999999999999999999", "!depth:2.5"] {
+            XCTAssertEqual(Query.parse(bad).groups, [[.invalid(bad)]], bad)
+        }
+    }
+
     func testGroups() {
         // makeIndex names: /data, Reports, q1 report.pdf, Q2 Report.docx, film, game1.mp4, notes.txt.
         let index = makeIndex()

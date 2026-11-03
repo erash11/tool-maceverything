@@ -58,7 +58,7 @@ Grant Full Disk Access one more time after that install; later rebuilds keep it.
 | `"game film"` | exact phrase |
 | `a \| b` | either word |
 | `!draft` | names without the word |
-| `<report 2026> \| invoice`, `!<draft old>` | groups (a `>` right after `size:`, `dm:` or `len:` compares: `<size:>1gb>`; end a `regex:` with a space before `>`; at most 256 tests, so `<8 words>\|<8 words>` works and `<16 words>\|<16 words>` doesn't) |
+| `<report 2026> \| invoice`, `!<draft old>` | groups (a `>` right after `size:`, `dm:`, `len:`, `depth:` or `childcount:` compares: `<size:>1gb>`; end a `regex:` with a space before `>`; at most 256 tests, so `<8 words>\|<8 words>` works and `<16 words>\|<16 words>` doesn't) |
 | `*.pdf`, `IMG_????.jpg` | wildcards on the whole name |
 | `ext:mp4;mov` | any listed extension |
 | `path:Football` | the word anywhere in the full path |
@@ -73,6 +73,9 @@ Grant Full Disk Access one more time after that install; later rebuilds keep it.
 | `ww:report` | the word as a whole word (`report-2026.pdf`, not `reports.pdf`) |
 | `wfn:notes.txt`, `startwith:q1`, `endwith:.txt` | the whole name, its start, its end |
 | `len:>200` | names longer than 200 characters |
+| `parent:/Users/eric` (or `infolder:`) | items directly in that folder, not in its subfolders (case ignored; quote a path with spaces: `"parent:/Volumes/X/My Docs"`) |
+| `depth:2` (or `parents:`), `depth:>5` | items with that many folders above them: `/` is 0, `/Users` is 1, `/Volumes/X/a` is 3 |
+| `childcount:>100`, `empty:` | folders holding that many files and folders; `empty:` = folders holding none |
 
 ## Settings
 
