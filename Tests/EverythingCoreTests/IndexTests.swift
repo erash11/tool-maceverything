@@ -251,6 +251,9 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(names(index, "<file:>report"), ["q1 report.pdf", "Q2 Report.docx"])
         XCTAssertEqual(names(index, "<file:><report>"), ["q1 report.pdf", "Q2 Report.docx"])
         XCTAssertEqual(names(index, "<!size:>1gb file:>"), ["notes.txt", "q1 report.pdf", "Q2 Report.docx"])
+        // With no value after it, ">" closes: <size:> is an unreadable size: in its own group.
+        XCTAssertEqual(names(index, "<size:> report"), [])
+        XCTAssertEqual(names(index, "<size:>|notes"), ["notes.txt"])
         XCTAssertEqual(names(index, "regex:(?<n>game)"), ["game1.mp4"])
         // !<file: report> = folders, or files without "report".
         XCTAssertEqual(names(index, "!<file: report>"), ["/data", "film", "game1.mp4", "notes.txt", "Reports"])
@@ -294,10 +297,17 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(spread.groups.count, 2000)
         XCTAssertLessThan(CompiledQuery(spread).bytes.count, 10_100)
         // A long ext: list repeated by the expansion shares its slots.
-        let exts = "ext:" + (1...2000).map { "e\($0)" }.joined(separator: ";") + ";mp4"
-        let manyExts = Query.parse("<" + exts + " q>|<" + Array(repeating: "zz", count: 1000).joined(separator: " ") + ">")
-        XCTAssertEqual(CompiledQuery(manyExts).slotStart.count, 2001)
+        let thousandZz = Array(repeating: "zz", count: 1000).joined(separator: " ")
+        let exts = "ext:" + (1...10).map { "e\($0)" }.joined(separator: ";") + ";mp4"
+        let manyExts = Query.parse("<" + exts + " q>|<" + thousandZz + ">")
+        XCTAssertEqual(manyExts.groups.count, 2000)
+        XCTAssertEqual(CompiledQuery(manyExts).slotStart.count, 11)
         XCTAssertEqual(index.search(manyExts).total, 0)
+        // But each copy is tested per record, so a long list repeated many times matches nothing.
+        let longExts = "ext:" + (1...2000).map { "e\($0)" }.joined(separator: ";")
+        let tooManyTests = "<" + longExts + " q>|<" + thousandZz + ">"
+        XCTAssertEqual(Query.parse(tooManyTests).groups, [[.invalid(tooManyTests)]])
+        XCTAssertNotEqual(Query.parse(longExts).groups, [[.invalid(longExts)]]) // once is fine
         // The limits hold for queries ANDed after parsing too (the search window adds its scope).
         let filmPaths = Query.parse((["film/"] + (1...15).map { "p\($0)/" }).joined(separator: "|"))
         let dataPaths = Query.parse((["data/"] + (1...15).map { "r\($0)/" }).joined(separator: "|"))

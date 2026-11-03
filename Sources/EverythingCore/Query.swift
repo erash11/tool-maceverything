@@ -111,13 +111,19 @@ public struct Query {
     static let maxDistinctRegexes = 16
     static let maxDistinctPaths = 16
 
+    /// The most tests one record may need: each term is one, an `ext:` term one per extension. An
+    /// `ext:` list repeated by `< >` expansion is tested again in every group it lands in.
+    static let maxTestsPerRecord = 16_384
+
     static func withinScanLimits(_ groups: [[Term]]) -> Bool {
         var regexes = Set<String>(), paths = Set<[UInt8]>()
+        var tests = 0
         for term in groups.joined() {
             if case let .regex(p, _) = term { regexes.insert(p) }
             if case let .pathContains(b, _) = term { paths.insert(b) }
+            if case let .ext(list, _) = term { tests += list.count } else { tests += 1 }
         }
-        return regexes.count <= maxDistinctRegexes && paths.count <= maxDistinctPaths
+        return regexes.count <= maxDistinctRegexes && paths.count <= maxDistinctPaths && tests <= maxTestsPerRecord
     }
 
     /// `node` (negated when `negate`) as groups ANDed of terms ORed, the form the search runs.
@@ -202,7 +208,8 @@ public struct Query {
             guard current.utf8.count <= 6 else { return false }
             return ["size:", "dm:", "len:", "!size:", "!dm:", "!len:"].contains(current.lowercased())
         }
-        for ch in text {
+        let chars = Array(text)
+        for (i, ch) in chars.enumerated() {
             if ch == "\"" {
                 inQuotes.toggle()
                 continue
@@ -227,7 +234,9 @@ public struct Query {
                 depth += 1
                 continue
             }
-            if ch == ">" && depth > 0 && !isComparisonFilter() && !inRegex() {
+            // After size:/dm:/len:, ">" compares only when a value follows it; `<size:>` closes.
+            let valueFollows = i + 1 < chars.count && !" \t\n|>".contains(chars[i + 1])
+            if ch == ">" && depth > 0 && !(isComparisonFilter() && valueFollows) && !inRegex() {
                 flush()
                 tokens.append(.close)
                 depth -= 1
