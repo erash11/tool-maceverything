@@ -260,7 +260,11 @@ final class SearchModel: ObservableObject {
                 guard let page else {
                     // Visible rows don't appear again, so retry here, a few times.
                     if attempt < 3 {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.loadNextPage(attempt: attempt + 1) }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                            // Only for the same search and page; a new search gets its own retries.
+                            guard gen == self.generation, next.offset == self.pages.nextOffset else { return }
+                            self.loadNextPage(attempt: attempt + 1)
+                        }
                     } else {
                         self.pageError = "  ·  could not load more rows"
                         self.message = self.footer()
