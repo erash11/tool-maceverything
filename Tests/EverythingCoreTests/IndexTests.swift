@@ -388,6 +388,9 @@ final class IndexTests: XCTestCase {
         let root = index.lookup("/data")!
         let tool = index.add(ScannedEntry(name: "Tool.app", isDirectory: true, size: 0, modified: 0), parent: root)
         index.add(ScannedEntry(name: "Info.plist", isDirectory: false, size: 1, modified: 0), parent: tool)
+        // A hidden folder named like a package is a folder, as a child or as a root (whose name is its path).
+        index.add(ScannedEntry(name: ".app", isDirectory: true, size: 0, modified: 0), parent: root)
+        index.addRoot("/Volumes/.app")
         for name in ["x.zzqq", ".bashrc", "trailing.", "noext", "a.8f3a9b2c4d5e6f7a8b9c", "R\u{E9}sum\u{E9}.PDF", "pic.jpeg"] {
             index.add(ScannedEntry(name: name, isDirectory: false, size: 1, modified: 0), parent: root)
         }
@@ -397,9 +400,9 @@ final class IndexTests: XCTestCase {
         XCTAssertNotEqual(pdfKind, "document")
         XCTAssertEqual(names(index, "\"type:\(pdfKind)\""), ["q1 report.pdf", "R\u{E9}sum\u{E9}.PDF"])
         XCTAssertEqual(names(index, "\"TYPE:\(pdfKind.uppercased())\" !ext:pdf"), [])
-        XCTAssertEqual(names(index, "\"type:\(folderKind)\""), ["/data", "film", "Reports"]) // an .app is a package
+        XCTAssertEqual(names(index, "\"type:\(folderKind)\""), [".app", "/data", "/Volumes/.app", "film", "Reports"]) // Tool.app is a package
         XCTAssertEqual(names(index, "\"type:\(folderKind)\" | \"type:\(pdfKind)\""),
-                       ["/data", "film", "q1 report.pdf", "Reports", "R\u{E9}sum\u{E9}.PDF"])
+                       [".app", "/data", "/Volumes/.app", "film", "q1 report.pdf", "Reports", "R\u{E9}sum\u{E9}.PDF"])
         for name in ["x.zzqq", ".bashrc", "trailing.", "noext", "a.8f3a9b2c4d5e6f7a8b9c"] {
             XCTAssertTrue(names(index, "type:document").contains(name), name) // no declared type
         }

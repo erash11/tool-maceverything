@@ -46,7 +46,8 @@ enum FileKinds {
     }
 
     /// Where the extension of a lowercase name lies: the bytes after the last ".", when that dot
-    /// isn't the first byte (".bashrc" has none) and 1 to 16 lowercase ASCII letters, digits, "-",
+    /// isn't the first byte of the name or of a root path's last part (".bashrc" and "/Volumes/.app"
+    /// have none) and 1 to 16 lowercase ASCII letters, digits, "-",
     /// "_" or "+" follow it. Anything else (a hash suffix, accents, a trailing dot) has none: no
     /// declared type has such an extension, and it keeps the number of kinds small.
     static func extensionRange(_ lower: UnsafeBufferPointer<UInt8>, _ start: Int, _ len: Int) -> Range<Int>? {
@@ -54,7 +55,11 @@ enum FileKinds {
         var i = end - 1
         while i > start && end - i <= maxExtensionLength + 1 {
             let b = lower[i]
-            if b == UInt8(ascii: ".") { return i + 1 < end ? (i + 1)..<end : nil }
+            if b == UInt8(ascii: ".") {
+                // A root's name is its full path: a dot right after "/" starts its last part, so it
+                // is a leading dot too ("/Volumes/.app" has none).
+                return i + 1 < end && lower[i - 1] != UInt8(ascii: "/") ? (i + 1)..<end : nil
+            }
             if !isExtensionByte(b) { return nil }
             i -= 1
         }
