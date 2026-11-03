@@ -65,8 +65,10 @@ struct CompiledQuery {
     /// Per regex: the required literal's offset and length in `bytes` (length 0 when none).
     var regexLiteralStart: [Int] = []
     var regexLiteralLength: [Int] = []
-    /// Index into `terms` of each path: term; its PathTable is built per scan.
+    /// Index into `terms` of the first path: term for each needle; its PathTable is built per scan.
     var pathTerms: [Int] = []
+    /// Needle -> its PathTable, so a needle repeated by `< >` expansion builds one table.
+    private var pathTable: [[UInt8]: Int] = [:]
     var hasRegex = false
     var hasTemp = false
 
@@ -101,8 +103,13 @@ struct CompiledQuery {
             t.kind = Kind.contains; t.negated = neg; t.start = addBytes(n); t.length = n.count
         case let .pathContains(n, neg):
             t.kind = Kind.path; t.negated = neg; t.start = addBytes(n); t.length = n.count
-            t.b = Int64(pathTerms.count) // which PathTable
-            pathTerms.append(terms.count)
+            if let table = pathTable[n] {
+                t.b = Int64(table) // which PathTable
+            } else {
+                t.b = Int64(pathTerms.count)
+                pathTable[n] = pathTerms.count
+                pathTerms.append(terms.count)
+            }
         case let .glob(n, neg):
             t.kind = Kind.glob; t.negated = neg; t.start = addBytes(n); t.length = n.count
         case let .regex(pattern, neg):

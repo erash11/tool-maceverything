@@ -231,6 +231,49 @@ final class IndexTests: XCTestCase {
         XCTAssertEqual(index.search(Query.parse("case:h *.rtf")).total, 0)
     }
 
+    func testGroups() {
+        // makeIndex names: /data, Reports, q1 report.pdf, Q2 Report.docx, film, game1.mp4, notes.txt.
+        let index = makeIndex()
+        XCTAssertEqual(names(index, "<report pdf> | notes"), ["notes.txt", "q1 report.pdf"])
+        XCTAssertEqual(names(index, "notes|<report pdf>"), ["notes.txt", "q1 report.pdf"])
+        XCTAssertEqual(index.search(Query.parse("!<report pdf>")).total, 6)
+        XCTAssertEqual(names(index, "<game | notes> !txt"), ["game1.mp4"])
+        XCTAssertEqual(names(index, "report <pdf | docx>"), ["q1 report.pdf", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "<<report>>"), names(index, "report"))
+        XCTAssertEqual(names(index, "<report"), names(index, "report")) // left open: closes at the end
+        XCTAssertEqual(names(index, "<>report"), names(index, "report"))
+        // Comparisons inside groups: ">" right after ":" compares, a later ">" closes.
+        XCTAssertEqual(names(index, "<size:>1gb>"), ["game1.mp4"])
+        XCTAssertEqual(names(index, "<size:<1kb file:> | game"), ["game1.mp4", "notes.txt", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "<regex:^game >"), ["game1.mp4"])
+        XCTAssertEqual(names(index, "<film/ file:>"), ["game1.mp4", "notes.txt"])
+        XCTAssertEqual(names(index, "<report folder:>|game"), ["game1.mp4", "Reports"])
+        XCTAssertEqual(names(index, "regex:(?<n>game)"), ["game1.mp4"])
+        // !<file: report> = folders, or files without "report".
+        XCTAssertEqual(names(index, "!<file: report>"), ["/data", "film", "game1.mp4", "notes.txt", "Reports"])
+        // An unreadable term stays unreadable under negation: !<report size:enormous> is !report.
+        XCTAssertEqual(names(index, "!<report size:enormous>"), ["/data", "film", "game1.mp4", "notes.txt"])
+        // Outside a group "<" and ">" are text; inside quotes too.
+        XCTAssertEqual(Query.parse("report>").groups, [[.contains(Array("report>".utf8), negated: false)]])
+        XCTAssertEqual(Query.parse("\"<a>\"").groups, [[.contains(Array("<a>".utf8), negated: false)]])
+        // A path needle repeated by the expansion builds one table.
+        XCTAssertEqual(CompiledQuery(Query.parse("<q1 report> | film/")).pathTerms.count, 1)
+        XCTAssertEqual(names(index, "<q1 report> | film/"), ["game1.mp4", "notes.txt", "q1 report.pdf"])
+    }
+
+    func testGroupLimits() {
+        let index = makeIndex()
+        let sixteen = "<a b c d e f g h i j k l m n o p>"
+        XCTAssertEqual(Query.parse(sixteen + "|" + sixteen).groups.count, 256)
+        let tooBig = Query.parse([sixteen, sixteen, sixteen].joined(separator: "|"))
+        XCTAssertEqual(tooBig.groups.count, 1)
+        XCTAssertEqual(index.search(tooBig).total, 0)
+        XCTAssertEqual(index.search(Query.parse(String(repeating: "<", count: 32) + "report")).total, 3)
+        XCTAssertEqual(index.search(Query.parse(String(repeating: "<", count: 33) + "report")).total, 0)
+        XCTAssertEqual(index.search(Query.parse(String(repeating: "!<", count: 50_000) + "report")).total, 0)
+        XCTAssertEqual(index.search(Query.parse(String(repeating: "<a>|", count: 50_000) + "report")).total, 0)
+    }
+
     func testSizeNamesAndRanges() {
         // makeIndex: q1 report.pdf 2 MB, Q2 Report.docx 10 B, game1.mp4 3 GB, notes.txt 5 B.
         let index = makeIndex()

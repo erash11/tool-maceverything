@@ -40,48 +40,171 @@ public struct Query {
     /// Parses Everything-style syntax: `foo bar`, `"exact phrase"`, `a | b`, `!skip`, `*.pdf`,
     /// `ext:pdf;docx`, `path:Football`, `drive:Work`, `size:>1gb`, `dm:today`, `regex:^IMG_\d+`,
     /// `file:`, `folder:`; modifiers `case:Report`, `ww:report`, `wfn:notes.txt`, `startwith:q`,
-    /// `endwith:.txt`; `len:>200`.
+    /// `endwith:.txt`; `len:>200`; groups `<a b> | c`, `!<a b>`.
     public static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> Query {
-        var groups: [[Term]] = []
-        var joinNext = false
-        for token in tokenize(text) {
-            if token == "|" {
-                joinNext = !groups.isEmpty
-                continue
+        // An explicit stack, not recursion: `<<<<…` can't run deep.
+        struct Frame {
+            var groups: [[Node]] = []
+            var joinNext = false
+            var negated = false
+            /// The group's meaning, or nil when it is empty (`<>`).
+            var node: Node? {
+                if groups.isEmpty { return nil }
+                let all = Node.all(groups.map { $0.count == 1 ? $0[0] : .any($0) })
+                return negated ? .not(all) : all
             }
-            let term = parseTerm(token, now: now, calendar: calendar)
-            if joinNext, !groups.isEmpty {
-                groups[groups.count - 1].append(term)
-            } else {
-                groups.append([term])
+            mutating func add(_ node: Node) {
+                if joinNext, !groups.isEmpty { groups[groups.count - 1].append(node) } else { groups.append([node]) }
+                joinNext = false
             }
-            joinNext = false
         }
+        var stack = [Frame()]
+        func close() {
+            let frame = stack.removeLast()
+            if let node = frame.node { stack[stack.count - 1].add(node) }
+        }
+        for token in tokenize(text) {
+            switch token {
+            case .or:
+                stack[stack.count - 1].joinNext = !stack[stack.count - 1].groups.isEmpty
+            case let .open(negated):
+                if stack.count > maxGroupDepth { return Query(groups: [[.invalid(text)]]) }
+                stack.append(Frame(negated: negated))
+            case .close:
+                if stack.count > 1 { close() } // tokenize only emits a close inside a group
+            case let .word(w):
+                stack[stack.count - 1].add(.term(parseTerm(w, now: now, calendar: calendar)))
+            }
+        }
+        while stack.count > 1 { close() } // groups left open close at the end
+        guard let root = stack[0].node else { return Query(groups: []) }
+        var size = 0
+        guard let groups = conjunctive(root, negate: false, size: &size) else { return Query(groups: [[.invalid(text)]]) }
         return Query(groups: groups)
     }
 
-    static func tokenize(_ text: String) -> [String] {
-        var tokens: [String] = []
+    /// A query before it is flattened: `<a b> | c` is any([all([a, b]), c]).
+    indirect enum Node {
+        case term(Term)
+        case all([Node])
+        case any([Node])
+        case not(Node)
+    }
+
+    /// Deepest `< >` nesting read; deeper matches nothing.
+    static let maxGroupDepth = 32
+    /// Most terms a query may expand to. `<a b> | <c d>` expands to (a|c)(a|d)(b|c)(b|d), so each
+    /// more OR of groups multiplies; past this the query matches nothing.
+    static let maxExpandedTerms = 4096
+
+    /// `node` (negated when `negate`) as groups ANDed of terms ORed, the form the search runs.
+    /// Negation moves down to the terms (De Morgan). Returns nil past maxExpandedTerms.
+    static func conjunctive(_ node: Node, negate: Bool, size: inout Int) -> [[Term]]? {
+        switch node {
+        case let .term(t):
+            size += 1
+            return size > maxExpandedTerms ? nil : [[negate ? negated(t) : t]]
+        case let .not(inner):
+            return conjunctive(inner, negate: !negate, size: &size)
+        case let .all(nodes) where !negate, let .any(nodes) where negate:
+            var out: [[Term]] = []
+            for n in nodes {
+                guard let part = conjunctive(n, negate: negate, size: &size) else { return nil }
+                out += part
+            }
+            return out
+        case let .all(nodes), let .any(nodes):
+            // An OR of parts: every way to pick one group from each part, joined.
+            var out: [[Term]] = [[]]
+            for n in nodes {
+                var partSize = 0
+                guard let part = conjunctive(n, negate: negate, size: &partSize) else { return nil }
+                let count = out.reduce(0) { $0 + $1.count } * part.count + part.reduce(0) { $0 + $1.count } * out.count
+                guard count <= maxExpandedTerms else { return nil }
+                out = out.flatMap { a in part.map { a + $0 } }
+            }
+            size += out.reduce(0) { $0 + $1.count }
+            return size > maxExpandedTerms ? nil : out
+        }
+    }
+
+    /// `!t`. A term that can't be read stays unreadable: it matches nothing either way.
+    static func negated(_ t: Term) -> Term {
+        switch t {
+        case let .contains(b, n): return .contains(b, negated: !n)
+        case let .pathContains(b, n): return .pathContains(b, negated: !n)
+        case let .glob(b, n): return .glob(b, negated: !n)
+        case let .regex(p, n): return .regex(p, negated: !n)
+        case let .ext(list, n): return .ext(list, negated: !n)
+        case let .size(c, v, n): return .size(c, v, negated: !n)
+        case let .sizeRange(c, lo, hi, n): return .sizeRange(c, lo, hi, negated: !n)
+        case let .modified(c, a, b, n): return .modified(c, a, b, negated: !n)
+        case let .cased(b, g, n): return .cased(b, glob: g, negated: !n)
+        case let .wholeWord(b, n): return .wholeWord(b, negated: !n)
+        case let .length(c, v, n): return .length(c, v, negated: !n)
+        case .filesOnly: return .foldersOnly
+        case .foldersOnly: return .filesOnly
+        case let .temp(n): return .temp(negated: !n)
+        case .invalid: return t
+        }
+    }
+
+    enum Token: Equatable {
+        case word(String)
+        case or
+        case open(negated: Bool)
+        case close
+    }
+
+    /// Splits on spaces, `|` and `< >`. Quotes keep everything inside as one word. `<` opens a group
+    /// only at a word's start (`!<` negates it); `>` closes one only inside a group, never inside a
+    /// `regex:` word (end it with a space: `<regex:a >`), and not right after `:` when a value follows
+    /// (`size:>1gb` compares; `<a file:>` closes).
+    static func tokenize(_ text: String) -> [Token] {
+        var tokens: [Token] = []
         var current = ""
         var inQuotes = false
-        for ch in text {
+        var depth = 0
+        func flush() {
+            if !current.isEmpty { tokens.append(.word(current)); current = "" }
+        }
+        func inRegex() -> Bool { current.lowercased().drop(while: { $0 == "!" }).hasPrefix("regex:") }
+        let chars = Array(text)
+        for (i, ch) in chars.enumerated() {
             if ch == "\"" {
                 inQuotes.toggle()
                 continue
             }
-            if !inQuotes && (ch == " " || ch == "\t" || ch == "\n") {
-                if !current.isEmpty { tokens.append(current); current = "" }
+            if inQuotes {
+                current.append(ch)
+                continue
+            }
+            if ch == " " || ch == "\t" || ch == "\n" {
+                flush()
                 continue
             }
             // "|" separates alternatives, except inside a regex: term, where it is alternation.
-            if !inQuotes && ch == "|" && !current.lowercased().drop(while: { $0 == "!" }).hasPrefix("regex:") {
-                if !current.isEmpty { tokens.append(current); current = "" }
-                tokens.append("|")
+            if ch == "|" && !inRegex() {
+                flush()
+                tokens.append(.or)
+                continue
+            }
+            if ch == "<" && (current.isEmpty || current == "!") {
+                tokens.append(.open(negated: !current.isEmpty))
+                current = ""
+                depth += 1
+                continue
+            }
+            let valueFollows = i + 1 < chars.count && !" \t\n|>".contains(chars[i + 1])
+            if ch == ">" && depth > 0 && !(current.hasSuffix(":") && valueFollows) && !inRegex() {
+                flush()
+                tokens.append(.close)
+                depth -= 1
                 continue
             }
             current.append(ch)
         }
-        if !current.isEmpty { tokens.append(current) }
+        flush()
         return tokens
     }
 
