@@ -160,6 +160,9 @@ final class SearchModel: ObservableObject {
     /// The first page's search time; the count in the footer comes from the latest page.
     private var milliseconds = 0.0
     private var pageError = ""
+    /// Paths whose rows are on screen. Table cells are keyed by path, so a new search that keeps
+    /// rows in place may not make them appear again; this lets it check where the list is.
+    private var visible = Set<String>()
 
     init() {
         refreshScopes()
@@ -225,6 +228,8 @@ final class SearchModel: ObservableObject {
                 self.milliseconds = first?.milliseconds ?? 0
                 self.hits = self.pages.hits
                 self.message = first == nil ? text : self.footer()
+                // Already scrolled near the end (rows reused from the last search): page now.
+                if self.visible.contains(where: self.pages.isNearEnd) { self.loadNextPage(attempt: 0) }
             }
         }
     }
@@ -232,9 +237,12 @@ final class SearchModel: ObservableObject {
     /// Called as rows come on screen: near the end of what is loaded, fetch the next page, so the
     /// list scrolls through every match instead of stopping at the first page.
     func rowAppeared(_ hit: SearchHit) {
+        visible.insert(hit.path)
         guard pages.isNearEnd(hit.path) else { return }
         loadNextPage(attempt: 0)
     }
+
+    func rowDisappeared(_ hit: SearchHit) { visible.remove(hit.path) }
 
     private func loadNextPage(attempt: Int) {
         guard pagesGeneration == generation, pages.hasMore, !loadingMore else { return }
@@ -405,6 +413,7 @@ struct SearchView: View {
         // The Name column is always shown, so its cells report which rows are on screen.
         Label(hit.name, systemImage: hit.isDirectory ? "folder" : "doc")
             .onAppear { model.rowAppeared(hit) }
+            .onDisappear { model.rowDisappeared(hit) }
     }
 
     private func folderCell(_ hit: SearchHit) -> some View {

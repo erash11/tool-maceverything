@@ -19,16 +19,19 @@ public struct ResultPages {
     /// The offset to ask for next: rows the daemon has sent so far, repeats included.
     public private(set) var nextOffset = 0
     private var position: [String: Int] = [:]
+    /// The daemon sent an empty page: nothing is left, whatever `total` says.
+    private var ended = false
 
     public init() {}
 
-    public var hasMore: Bool { nextOffset < total }
+    public var hasMore: Bool { !ended && nextOffset < total }
 
     /// Starts over with the first page of a new search.
     public mutating func reset(with first: SearchResult) {
         hits = []
         position = [:]
         nextOffset = 0
+        ended = false
         add(first)
     }
 
@@ -51,7 +54,7 @@ public struct ResultPages {
         total = page.total
         nextOffset += page.hits.count
         // The match count can shrink between pages; an empty page means nothing is left.
-        if page.hits.isEmpty { total = nextOffset }
+        if page.hits.isEmpty { ended = true }
         for hit in page.hits where position[hit.path] == nil {
             position[hit.path] = hits.count
             hits.append(hit)

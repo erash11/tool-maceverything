@@ -46,6 +46,16 @@ final class ResultPagesTests: XCTestCase {
         XCTAssertEqual(p.hits.count, 1)
     }
 
+    func testEmptyPageKeepsTheDaemonsCount() {
+        var p = ResultPages()
+        p.reset(with: page((0..<5).map { "f\($0)" }, total: 50))
+        p.append(page([], total: 3)) // matches shrank below what is loaded
+        XCTAssertEqual(p.total, 3)
+        XCTAssertFalse(p.hasMore)
+        p.reset(with: page(["a"], total: 2))
+        XCTAssertTrue(p.hasMore) // a new search pages again
+    }
+
     func testResetForgetsTheOldSearch() {
         var p = ResultPages()
         p.reset(with: page(["a", "b"], total: 9))
