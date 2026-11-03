@@ -8,8 +8,8 @@
   O(rows asked for)). Live through the daemon, `a` (1.6M matches), warm: type 45 ms, extension
   62 ms, size 23 ms (the first type sort after a start pays the kind cache build). Installed:
   daemon/ev from `main` 0aecf37 (backups `*.pre-typesort-2026-11-03`), app from CI run
-  41711460748. Codex: 3 rounds, approved. Header click in the app NOT checked live (the panel
-  can't be opened by Accessibility: the menu item press doesn't open it); Eric to check.
+  41711460748. Codex: 3 rounds, approved. Header click confirmed working by Eric (2026-11-03).
+  (Accessibility can't open the panel: the menu item press doesn't open it.)
   Note: the Mac's load average hit 140 this afternoon from other apps; timings then were 5x slow.
 - MERGED #21 (gap 3, was Next c): Down Arrow in the search box selects the first row (keeps a
   selection still among the results) and moves focus to the list (AppKit makeFirstResponder;
@@ -152,7 +152,7 @@ The old Next #5 (delete codex branches, close #10) was already done.
 ## Next
 0. Next PARITY gaps (brief Codex with the existing bounds and that case-sensitive-volume edge
    cases past them are out of scope, or it runs 7+ rounds again, as #17 and #18 did):
-   Up Arrow from the top row back to the box; Ctrl+1..9 sort shortcuts; an incremental
+   Ctrl+1..6 sort shortcuts (in progress); an incremental
    path-order merge if the ~0.2 s rebuild under churn shows up in use. Then the smaller items in the
    2026-11-03 handoff (OneDrive group container, `ev --daemon-only`).
 1. Scope menu: offer a cloud account (and Cloud) only when it is indexed, that is, added as a
