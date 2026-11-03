@@ -143,20 +143,159 @@ final class IndexTests: XCTestCase {
         // Skipping these used to leave an empty query, which matched every file.
         let index = makeIndex()
         XCTAssertEqual(index.search(Query.parse("")).total, 7)
-        for q in ["dm:lastweek", "dm:2026-10-01..2026-10-15", "size:10mb..50mb", "size:huge",
-                  "ext:", "path:", "drive:", "regex:", "!size:huge", "!dm:lastweek",
-                  "report dm:nonsense", "report | size:huge", "size:huge | dm:nonsense",
+        for q in ["dm:lastfortnight", "dm:2026-10-15..2026-10-01", "size:10mb..5mb", "size:enormous",
+                  "ext:", "path:", "drive:", "regex:", "!size:enormous", "!dm:lastfortnight",
+                  "report dm:nonsense", "report | size:enormous", "size:enormous | dm:nonsense",
                   "regex:([", "!regex:([", "report | !regex:([", "dm:2026-10-x-15", "!dm:2026-10-x-15",
-                  "dm:2026-02-30", "!dm:2026-1x-01", "dm:-2026-10-15"] {
+                  "dm:2026-02-30", "!dm:2026-1x-01", "dm:-2026-10-15", "dm:2026-13", "dm:last0days",
+                  "dm:last3fortnights", "dm:2026..", "size:..5mb"] {
             let r = index.search(Query.parse(q))
             XCTAssertEqual(r.total, q.hasPrefix("report |") ? 3 : 0, q)
         }
         // Real dates still parse, with or without zero padding.
-        for q in ["dm:2026-10-15", "dm:2026-1-5", "dm:<2026-10-15"] {
+        for q in ["dm:2026-10-15", "dm:2026-1-5", "dm:<2026-10-15", "dm:2026", "dm:2026-10", "size:huge"] {
             XCTAssertNotEqual(Query.parse(q).groups, [[.invalid(q)]], q)
         }
-        XCTAssertEqual(Query.parse("size:huge").groups, [[.invalid("size:huge")]])
-        XCTAssertEqual(Query.parse("!dm:lastweek").groups, [[.invalid("!dm:lastweek")]])
+        XCTAssertEqual(Query.parse("size:enormous").groups, [[.invalid("size:enormous")]])
+        XCTAssertEqual(Query.parse("!dm:lastfortnight").groups, [[.invalid("!dm:lastfortnight")]])
+    }
+
+    func testSizeNamesAndRanges() {
+        // makeIndex: q1 report.pdf 2 MB, Q2 Report.docx 10 B, game1.mp4 3 GB, notes.txt 5 B.
+        let index = makeIndex()
+        XCTAssertEqual(names(index, "size:tiny"), ["notes.txt", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "size:large"), ["q1 report.pdf"])
+        XCTAssertEqual(names(index, "size:gigantic"), ["game1.mp4"])
+        XCTAssertEqual(names(index, "size:empty"), [])
+        XCTAssertEqual(names(index, "size:1mb..10gb"), ["game1.mp4", "q1 report.pdf"])
+        XCTAssertEqual(names(index, "size:5..10"), ["notes.txt", "Q2 Report.docx"]) // both ends included
+        XCTAssertEqual(names(index, "size:tiny..small"), ["notes.txt", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "size:>large"), ["game1.mp4"])
+        XCTAssertEqual(names(index, "size:<large"), ["notes.txt", "Q2 Report.docx"])
+        XCTAssertEqual(names(index, "size:>=large"), ["game1.mp4", "q1 report.pdf"])
+        XCTAssertEqual(names(index, "file: !size:tiny"), ["game1.mp4", "q1 report.pdf"])
+        XCTAssertEqual(names(index, "size:tiny | size:gigantic"), ["game1.mp4", "notes.txt", "Q2 Report.docx"])
+
+        // Boundaries: empty is 0 bytes only, tiny is 1 byte to 10 KB.
+        let edge = FileIndex()
+        let root = edge.addRoot("/e")
+        for (name, size) in [("zero", Int64(0)), ("one", Int64(1)), ("tenk", Int64(10 << 10)), ("over", Int64((10 << 10) + 1))] {
+            edge.add(ScannedEntry(name: name, isDirectory: false, size: size, modified: 0), parent: root)
+        }
+        edge.sortIfNeeded(force: true)
+        XCTAssertEqual(names(edge, "size:empty"), ["zero"])
+        XCTAssertEqual(names(edge, "size:tiny"), ["one", "tenk"])
+        XCTAssertEqual(names(edge, "size:small"), ["over"])
+        // Negative sizes are unreadable, with or without a unit, also inside a range.
+        XCTAssertEqual(names(index, "size:0..2.5gb"), ["notes.txt", "q1 report.pdf", "Q2 Report.docx"]) // decimals still work
+        for q in ["size:-1", "size:-1..10", "size:-1b..10b", "size:>=-1..10", "!size:-1..10", "size:5..-1",
+                  "size:0...2gb", "size:0....2gb", "size:1..2..3"] {
+            XCTAssertEqual(Query.parse(q).groups, [[.invalid(q)]], q)
+        }
+    }
+
+    func testDatePeriodsAndRanges() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        cal.firstWeekday = 1 // weeks start on Sunday: this week is Sun 10-11 to Sat 10-17
+        func at(_ y: Int, _ m: Int, _ d: Int, _ h: Int = 12) -> Int64 {
+            Int64(cal.date(from: DateComponents(year: y, month: m, day: d, hour: h))!.timeIntervalSince1970)
+        }
+        let now = cal.date(from: DateComponents(year: 2026, month: 10, day: 15, hour: 12))! // a Thursday
+        let index = FileIndex()
+        let root = index.addRoot("/x", modified: 0)
+        for (name, time) in [("a", at(2026, 10, 15, 10)), ("b", at(2026, 10, 12)), ("c", at(2026, 10, 6)),
+                             ("d", at(2026, 9, 20)), ("e", at(2025, 6, 1)), ("f", at(2026, 10, 15, 1))] {
+            index.add(ScannedEntry(name: name, isDirectory: false, size: 1, modified: time), parent: root)
+        }
+        index.sortIfNeeded(force: true)
+        func dm(_ q: String) -> [String] {
+            index.search(Query.parse("file: dm:" + q, now: now, calendar: cal), options: SearchOptions(limit: 100))
+                .hits.map(\.name)
+        }
+        XCTAssertEqual(dm("today"), ["a", "f"])
+        XCTAssertEqual(dm("thisweek"), ["a", "b", "f"])
+        XCTAssertEqual(dm("currentweek"), ["a", "b", "f"])
+        XCTAssertEqual(dm("lastweek"), ["c"])
+        XCTAssertEqual(dm("prevweek"), ["c"])
+        XCTAssertEqual(dm("thismonth"), ["a", "b", "c", "f"])
+        XCTAssertEqual(dm("lastmonth"), ["d"])
+        XCTAssertEqual(dm("thisyear"), ["a", "b", "c", "d", "f"])
+        XCTAssertEqual(dm("lastyear"), ["e"])
+        XCTAssertEqual(dm("2025"), ["e"])
+        XCTAssertEqual(dm("2026-09"), ["d"])
+        XCTAssertEqual(dm("2026-10-05..2026-10-12"), ["b", "c"])
+        XCTAssertEqual(dm("2026-09..2026-10-06"), ["c", "d"])
+        XCTAssertEqual(dm("last6hours"), ["a"])
+        XCTAssertEqual(dm("last7days"), ["a", "b", "f"]) // 10-09 through today
+        XCTAssertEqual(dm("past3weeks"), ["a", "b", "c", "f"]) // from 09-24
+        XCTAssertEqual(dm(">lastmonth"), ["a", "b", "c", "f"])
+        XCTAssertEqual(dm("<thisyear"), ["e"])
+        XCTAssertEqual(dm("<=lastweek"), ["c", "d", "e"])
+        // One ".." only; a long chain is rejected without deep recursion.
+        XCTAssertEqual(dm("2026..2026..2026"), [])
+        let chain = "dm:" + Array(repeating: "2026", count: 50_000).joined(separator: "..")
+        XCTAssertEqual(Query.parse(chain).groups, [[.invalid(chain)]])
+    }
+
+    func testRollingWindowsIncludeFutureDates() {
+        // Everything's default: "last 6 hours" runs from 6 hours ago with no end.
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let now = cal.date(from: DateComponents(year: 2026, month: 10, day: 15, hour: 12))!
+        let t = Int64(now.timeIntervalSince1970)
+        let index = FileIndex()
+        let root = index.addRoot("/x", modified: 0)
+        let day: Int64 = 86_400
+        let files: [(String, Int64)] = [("past", t - 3600), ("old", t - day * 30), ("tomorrow", t + day),
+                                        ("future", t + day * 400)]
+        for (name, time) in files {
+            index.add(ScannedEntry(name: name, isDirectory: false, size: 1, modified: time), parent: root)
+        }
+        index.sortIfNeeded(force: true)
+        func dm(_ q: String) -> [String] {
+            index.search(Query.parse("file: " + q, now: now, calendar: cal), options: SearchOptions(limit: 100))
+                .hits.map(\.name)
+        }
+        XCTAssertEqual(dm("dm:last6hours"), ["future", "past", "tomorrow"])
+        XCTAssertEqual(dm("dm:last7days"), ["future", "past", "tomorrow"])
+        XCTAssertEqual(dm("!dm:last7days"), ["old"])
+        XCTAssertEqual(dm("dm:<last7days"), ["old"])
+        // Comparisons against a rolling window compare with its cutoff.
+        XCTAssertEqual(dm("dm:>last7days"), ["future", "past", "tomorrow"])
+        XCTAssertEqual(dm("dm:>=last7days"), ["future", "past", "tomorrow"])
+        XCTAssertEqual(dm("dm:<=last7days"), ["old"])
+        // A rolling window can't be a range endpoint.
+        for q in ["dm:2026..last7days", "dm:>2026..last7days", "dm:last7days..2026", "dm:<=past2weeks..today"] {
+            XCTAssertEqual(Query.parse(q, now: now, calendar: cal).groups, [[.invalid(q)]], q)
+        }
+        XCTAssertEqual(dm("dm:today"), ["past"]) // calendar days still end at midnight
+    }
+
+    func testDayEdgesWhenATimeChangeSkipsMidnight() {
+        // Sao Paulo skipped from 00:00 to 01:00 on 2018-11-04, so that day began at 01:00.
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "America/Sao_Paulo")!
+        func at(_ d: Int, _ h: Int, _ m: Int = 0) -> Int64 {
+            Int64(cal.date(from: DateComponents(year: 2018, month: 11, day: d, hour: h, minute: m))!.timeIntervalSince1970)
+        }
+        let now = cal.date(from: DateComponents(year: 2018, month: 11, day: 4, hour: 12))!
+        let index = FileIndex()
+        let root = index.addRoot("/x", modified: 0)
+        for (name, time) in [("noon4", at(4, 12)), ("early5", at(5, 0, 30)), ("late3", at(3, 23, 30))] {
+            index.add(ScannedEntry(name: name, isDirectory: false, size: 1, modified: time), parent: root)
+        }
+        index.sortIfNeeded(force: true)
+        func dm(_ q: String) -> [String] {
+            index.search(Query.parse("file: dm:" + q, now: now, calendar: cal), options: SearchOptions(limit: 100))
+                .hits.map(\.name)
+        }
+        XCTAssertEqual(dm("today"), ["noon4"])
+        XCTAssertEqual(dm("2018-11-04"), ["noon4"])
+        XCTAssertEqual(dm("2018-11-05"), ["early5"])
+        XCTAssertEqual(dm("yesterday"), ["late3"])
+        // Starts at the start of 11-03 (not 01:00); rolling windows are open-ended, so 11-05 counts.
+        XCTAssertEqual(dm("last2days"), ["early5", "late3", "noon4"])
     }
 
     func testNegatedFilters() {

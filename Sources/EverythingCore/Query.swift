@@ -13,6 +13,9 @@ public struct Query {
         case regex(String, negated: Bool)
         case ext([[UInt8]], negated: Bool)             // ".pdf" style lowercase suffixes
         case size(Comparison, Int64, negated: Bool)
+        /// An inclusive byte range [low, high]: `size:1mb..10mb`, `size:huge`. `=` is inside it,
+        /// `>` above it, `>=` from its low end, `<` below it, `<=` up to its high end.
+        case sizeRange(Comparison, Int64, Int64, negated: Bool)
         case modified(Comparison, Int64, Int64, negated: Bool) // [start, end) seconds since 1970
         case filesOnly
         case foldersOnly
@@ -111,12 +114,23 @@ public struct Query {
         }
         if lower.hasPrefix("size:") {
             let (cmp, rest) = comparison(String(lower.dropFirst(5)))
+            if let (low, high) = parseSizeRange(rest) { return .sizeRange(cmp, low, high, negated: negated) }
             guard let bytes = parseSize(rest) else { return .invalid(raw) }
             return .size(cmp, bytes, negated: negated)
         }
         if lower.hasPrefix("dm:") {
             let (cmp, rest) = comparison(String(lower.dropFirst(3)))
             guard let (start, end) = parseDay(rest, now: now, calendar: calendar) else { return .invalid(raw) }
+            if end == Int64.max {
+                // A rolling window has only a cutoff: ">" and ">=" mean since it, "<" and "<=" before it.
+                let since: Comparison
+                switch cmp {
+                case .greater, .greaterOrEqual: since = .greaterOrEqual
+                case .less, .lessOrEqual: since = .less
+                case .equal: since = .equal
+                }
+                return .modified(since, start, end, negated: negated)
+            }
             return .modified(cmp, start, end, negated: negated)
         }
         if lower.contains("*") || lower.contains("?") {
@@ -146,32 +160,117 @@ public struct Query {
             guard bytes.isFinite, bytes >= 0, bytes < 9.2e18 else { return nil }
             return Int64(bytes)
         }
-        return Int64(s)
+        guard let bytes = Int64(s), bytes >= 0 else { return nil } // no negative sizes, as with units
+        return bytes
     }
 
-    /// Returns the [start, end) of the day or range named by `s`.
+    /// Everything's size names, as inclusive byte ranges.
+    static let sizeNames: [String: (Int64, Int64)] = [
+        "empty": (0, 0),
+        "tiny": (1, 10 << 10), // empty files are `empty`, not tiny
+        "small": ((10 << 10) + 1, 100 << 10),
+        "medium": ((100 << 10) + 1, 1 << 20),
+        "large": ((1 << 20) + 1, 16 << 20),
+        "huge": ((16 << 20) + 1, 128 << 20),
+        "gigantic": ((128 << 20) + 1, Int64.max),
+    ]
+
+    /// `huge`, or `low..high` with sizes as in parseSize (either end may be a size name).
+    static func parseSizeRange(_ s: String) -> (Int64, Int64)? {
+        if let named = sizeNames[s] { return named }
+        let ends = s.components(separatedBy: "..")
+        // Exactly one "..", and no stray dot next to it ("0...2gb" is not 0 to 0.2 GB).
+        guard ends.count == 2, !ends[0].hasSuffix("."), !ends[1].hasPrefix(".") else { return nil }
+        let a = ends[0], b = ends[1]
+        guard let low = sizeNames[a]?.0 ?? parseSize(a), let high = sizeNames[b]?.1 ?? parseSize(b),
+              low <= high else { return nil }
+        return (low, high)
+    }
+
+    /// Returns the [start, end) of the day, period or range named by `s`:
+    /// `today`, `yesterday`; `thisweek`/`lastweek`, `thismonth`/`lastmonth`, `thisyear`/`lastyear`
+    /// (calendar periods; `this`/`current` and `last`/`prev`/`previous` all work); `last7days`,
+    /// `past3weeks`, `last12hours` (rolling: from that far back, with no end, so future dates count; `days`
+    /// counts today as one); `2026`, `2026-10`, `2026-10-15`; and `a..b`, from the start of a to
+    /// the end of b.
     static func parseDay(_ s: String, now: Date, calendar: Calendar) -> (Int64, Int64)? {
-        let today = calendar.startOfDay(for: now)
+        guard s.contains("..") else { return parseOneDay(s, now: now, calendar: calendar) }
+        // Exactly one "..": no recursion, so a long chain of them can't run deep.
+        let ends = s.components(separatedBy: "..")
+        // A rolling window has no end, so it can't be a range endpoint ("2026..last7days").
+        guard ends.count == 2,
+              !ends.contains(where: { parseRolling($0, now: now, today: calendar.startOfDay(for: now), calendar: calendar) != nil }),
+              let (a, _) = parseOneDay(ends[0], now: now, calendar: calendar),
+              let (_, b) = parseOneDay(ends[1], now: now, calendar: calendar),
+              a < b else { return nil }
+        return (a, b)
+    }
+
+    /// One day, period or date (no range); see parseDay.
+    static func parseOneDay(_ s: String, now: Date, calendar: Calendar) -> (Int64, Int64)? {
         func secs(_ d: Date) -> Int64 { Int64(d.timeIntervalSince1970) }
-        switch s {
-        case "today":
-            return (secs(today), secs(calendar.date(byAdding: .day, value: 1, to: today)!))
-        case "yesterday":
-            return (secs(calendar.date(byAdding: .day, value: -1, to: today)!), secs(today))
-        case "thisweek", "last7days":
-            return (secs(calendar.date(byAdding: .day, value: -6, to: today)!),
-                    secs(calendar.date(byAdding: .day, value: 1, to: today)!))
-        default:
-            // Every part must be a number, and the date must exist as written (no 2026-02-30).
-            let fields = s.split(separator: "-", omittingEmptySubsequences: false)
-            let parts = fields.compactMap { Int($0) }
-            guard fields.count == 3, parts.count == 3,
-                  let day = calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2])),
-                  calendar.component(.year, from: day) == parts[0],
-                  calendar.component(.month, from: day) == parts[1],
-                  calendar.component(.day, from: day) == parts[2]
-            else { return nil }
-            return (secs(day), secs(calendar.date(byAdding: .day, value: 1, to: day)!))
+        let today = calendar.startOfDay(for: now)
+        // Day edges come from the calendar: where a time change skips midnight, a day starts at
+        // 01:00, and "today + 1 day" would land an hour into tomorrow.
+        let tomorrow = calendar.dateInterval(of: .day, for: now)?.end
+            ?? calendar.date(byAdding: .day, value: 1, to: today)!
+        func period(_ unit: Calendar.Component, back: Int) -> (Int64, Int64)? {
+            guard let day = calendar.date(byAdding: unit, value: -back, to: today),
+                  let interval = calendar.dateInterval(of: unit, for: day) else { return nil }
+            return (secs(interval.start), secs(interval.end))
         }
+        let units: [(String, Calendar.Component)] = [("week", .weekOfYear), ("month", .month), ("year", .year)]
+        for (name, unit) in units {
+            if ["this", "current"].contains(where: { s == $0 + name }) { return period(unit, back: 0) }
+            if ["last", "prev", "previous"].contains(where: { s == $0 + name }) { return period(unit, back: 1) }
+        }
+        if s == "today" { return (secs(today), secs(tomorrow)) }
+        if s == "yesterday" {
+            return (secs(calendar.startOfDay(for: calendar.date(byAdding: .day, value: -1, to: today)!)), secs(today))
+        }
+        if let start = parseRolling(s, now: now, today: today, calendar: calendar) {
+            // Open-ended, as in Everything: a file dated in the future is still "in the last 7 days".
+            return (secs(start), Int64.max)
+        }
+        return parseDate(s, calendar: calendar).map { (secs($0.start), secs($0.end)) }
+    }
+
+    /// `last7days`, `past3weeks`, `last12hours`: the start of that rolling window.
+    static func parseRolling(_ s: String, now: Date, today: Date, calendar: Calendar) -> Date? {
+        guard let prefix = ["last", "past"].first(where: { s.hasPrefix($0) }) else { return nil }
+        let rest = s.dropFirst(prefix.count)
+        let digits = rest.prefix(while: { $0.isASCII && $0.isNumber })
+        var unit = String(rest.dropFirst(digits.count))
+        if unit.hasSuffix("s") { unit.removeLast() }
+        guard let n = Int(digits), n > 0, n <= 100_000 else { return nil }
+        let back: (Calendar.Component, Int)
+        switch unit {
+        case "hour": return calendar.date(byAdding: .hour, value: -n, to: now)
+        case "day": back = (.day, -(n - 1)) // today is day 1
+        case "week": back = (.weekOfYear, -n)
+        case "month": back = (.month, -n)
+        case "year": back = (.year, -n)
+        default: return nil
+        }
+        // From the start of that day (moving from a 01:00 start keeps 01:00 otherwise).
+        return calendar.date(byAdding: back.0, value: back.1, to: today).map(calendar.startOfDay)
+    }
+
+    /// `2026`, `2026-10` or `2026-10-15`: that year, month or day. Every part must be a number, and
+    /// the date must exist as written (no 2026-02-30, no month 13).
+    static func parseDate(_ s: String, calendar: Calendar) -> DateInterval? {
+        let fields = s.split(separator: "-", omittingEmptySubsequences: false)
+        guard (1...3).contains(fields.count),
+              fields.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && $0.isNumber } }) else { return nil }
+        let parts = fields.compactMap { Int($0) }
+        guard parts.count == fields.count else { return nil }
+        let year = parts[0], month = parts.count > 1 ? parts[1] : 1, day = parts.count > 2 ? parts[2] : 1
+        guard let start = calendar.date(from: DateComponents(year: year, month: month, day: day)),
+              calendar.component(.year, from: start) == year,
+              calendar.component(.month, from: start) == month,
+              calendar.component(.day, from: start) == day else { return nil }
+        let unit: Calendar.Component = parts.count == 1 ? .year : parts.count == 2 ? .month : .day
+        // The calendar's own interval, so the end is the next period's real start.
+        return calendar.dateInterval(of: unit, for: start)
     }
 }

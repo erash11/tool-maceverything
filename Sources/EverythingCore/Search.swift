@@ -49,7 +49,7 @@ struct CompiledQuery {
     enum Kind {
         static let contains: UInt8 = 0, path: UInt8 = 1, glob: UInt8 = 2, regex: UInt8 = 3, ext: UInt8 = 4
         static let size: UInt8 = 5, modified: UInt8 = 6, files: UInt8 = 7, folders: UInt8 = 8
-        static let temp: UInt8 = 9, never: UInt8 = 10
+        static let temp: UInt8 = 9, never: UInt8 = 10, sizeRange: UInt8 = 11
     }
 
     var terms: [Term] = []
@@ -127,6 +127,8 @@ struct CompiledQuery {
             }
         case let .size(cmp, value, neg):
             t.kind = Kind.size; t.negated = neg; t.cmp = CompiledQuery.cmpCode(cmp); t.a = value
+        case let .sizeRange(cmp, low, high, neg):
+            t.kind = Kind.sizeRange; t.negated = neg; t.cmp = CompiledQuery.cmpCode(cmp); t.a = low; t.b = high
         case let .modified(cmp, start, end, neg):
             t.kind = Kind.modified; t.negated = neg; t.cmp = CompiledQuery.cmpCode(cmp); t.a = start; t.b = end
         case .filesOnly:
@@ -378,6 +380,19 @@ struct MatchContext {
                     }
                 case CompiledQuery.Kind.size:
                     hit = r.flags & 1 == 0 && compare(r.size, t.cmp, t.a)
+                case CompiledQuery.Kind.sizeRange:
+                    // Folders have no size here, as with size:.
+                    if r.flags & 1 != 0 {
+                        hit = false
+                    } else {
+                        switch t.cmp {
+                        case 4: hit = r.size >= t.a && r.size <= t.b
+                        case 2: hit = r.size > t.b
+                        case 3: hit = r.size >= t.a
+                        case 0: hit = r.size < t.a
+                        default: hit = r.size <= t.b
+                        }
+                    }
                 case CompiledQuery.Kind.modified:
                     switch t.cmp {
                     case 4: hit = r.modified >= t.a && r.modified < t.b
