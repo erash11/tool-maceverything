@@ -149,6 +149,20 @@ final class SearchModel: ObservableObject {
     private static let scopeKey = "searchScope"
     private let queue = DispatchQueue(label: "MacEverything.app.search")
     private var generation = 0
+    /// Every row loaded so far for the current search; `hits` mirrors `pages.hits`.
+    private var pages = ResultPages()
+    /// The current search's request, reused with a new offset for each further page.
+    private var request = IPCRequest(command: "search")
+    private var loadingMore = false
+    /// The generation whose first page `pages` holds; paging waits until it equals `generation`,
+    /// so rows of the previous search can't ask for a page of the new one.
+    private var pagesGeneration = -1
+    /// The first page's search time; the count in the footer comes from the latest page.
+    private var milliseconds = 0.0
+    private var pageError = ""
+    /// Paths whose rows are on screen. Table cells are keyed by path, so a new search that keeps
+    /// rows in place may not make them appear again; this lets it check where the list is.
+    private var visible = Set<String>()
 
     init() {
         refreshScopes()
@@ -179,16 +193,19 @@ final class SearchModel: ObservableObject {
     func run() {
         generation += 1
         let gen = generation
-        let request = IPCRequest(command: "search", query: query, limit: 500, sort: sort, descending: descending,
+        loadingMore = false
+        let request = IPCRequest(command: "search", query: query, limit: ResultPages.firstPage, sort: sort,
+                                 descending: descending,
                                  scope: [scope.query, filter.query, showTemp ? "" : "!temp:"]
                                      .filter { !$0.isEmpty }.joined(separator: " "))
+        self.request = request
         queue.async {
             let text: String
-            var newHits: [SearchHit] = []
+            var first: SearchResult?
             do {
                 let response = try IPC.send(request)
                 if let r = response.result {
-                    newHits = r.hits
+                    first = r
                     text = "\(r.total.formatted()) objects  ·  \(String(format: "%.1f", r.milliseconds)) ms"
                 } else {
                     text = response.error ?? "Search failed"
@@ -205,10 +222,70 @@ final class SearchModel: ObservableObject {
             }
             DispatchQueue.main.async {
                 guard gen == self.generation else { return }
-                self.hits = newHits
-                self.message = text
+                if let first { self.pages.reset(with: first) } else { self.pages = ResultPages() }
+                self.pagesGeneration = gen
+                self.pageError = ""
+                self.milliseconds = first?.milliseconds ?? 0
+                self.hits = self.pages.hits
+                self.message = first == nil ? text : self.footer()
+                // Already scrolled near the end (rows reused from the last search): page now.
+                if self.visible.contains(where: self.pages.isNearEnd) { self.loadNextPage(attempt: 0) }
             }
         }
+    }
+
+    /// Called as rows come on screen: near the end of what is loaded, fetch the next page, so the
+    /// list scrolls through every match instead of stopping at the first page.
+    func rowAppeared(_ hit: SearchHit) {
+        visible.insert(hit.path)
+        guard pages.isNearEnd(hit.path) else { return }
+        loadNextPage(attempt: 0)
+    }
+
+    func rowDisappeared(_ hit: SearchHit) { visible.remove(hit.path) }
+
+    private func loadNextPage(attempt: Int) {
+        guard pagesGeneration == generation, pages.hasMore, !loadingMore else { return }
+        loadingMore = true
+        let gen = generation
+        var next = request
+        next.offset = pages.nextOffset
+        next.limit = ResultPages.nextPage
+        queue.async {
+            let page = (try? IPC.send(next))?.result
+            DispatchQueue.main.async {
+                guard gen == self.generation else { return } // run() already reset loadingMore
+                self.loadingMore = false
+                guard next.offset == self.pages.nextOffset else { return }
+                guard let page else {
+                    // Visible rows don't appear again, so retry here, a few times.
+                    if attempt < 3 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                            // Only for the same search and page; a new search gets its own retries.
+                            guard gen == self.generation, next.offset == self.pages.nextOffset else { return }
+                            self.loadNextPage(attempt: attempt + 1)
+                        }
+                    } else {
+                        self.pageError = "  ·  could not load more rows"
+                        self.message = self.footer()
+                    }
+                    return
+                }
+                let added = self.pages.append(page)
+                self.pageError = ""
+                self.hits = self.pages.hits
+                self.message = self.footer()
+                // A page of rows already shown puts nothing new on screen to ask for the next one.
+                if added == 0 { self.loadNextPage(attempt: 0) }
+            }
+        }
+    }
+
+    private func footer() -> String {
+        var text = "\(pages.total.formatted()) objects  ·  \(String(format: "%.1f", milliseconds)) ms"
+        // Repeats are skipped, so loaded rows can differ from the total even when paging is done.
+        if pages.hits.count != pages.total { text += "  ·  showing \(pages.hits.count.formatted())" }
+        return text + pageError
     }
 }
 
@@ -337,7 +414,10 @@ struct SearchView: View {
     }
 
     private func nameCell(_ hit: SearchHit) -> some View {
+        // The Name column is always shown, so its cells report which rows are on screen.
         Label(hit.name, systemImage: hit.isDirectory ? "folder" : "doc")
+            .onAppear { model.rowAppeared(hit) }
+            .onDisappear { model.rowDisappeared(hit) }
     }
 
     private func folderCell(_ hit: SearchHit) -> some View {
